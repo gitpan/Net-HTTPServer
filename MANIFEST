@@ -7,3 +7,7 @@ Makefile.PL
 examples/simple_test.pl
 lib/Net/HTTPServer.pm
 lib/Net/HTTPServer/mime.types
+t/1_load.t
+t/lib/Test/Builder.pm
+t/lib/Test/More.pm
+t/lib/Test/Simple.pm

@@ -203,19 +203,18 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.2";
+$VERSION = "0.3";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
 #------------------------------------------------------------------------------
-BEGIN
+if (eval "require use IO::Socket::SSL")
 {
     $SSL = 1;
-    eval { use IO::Socket::SSL; };
-    if ($@)
-    {
-        $SSL = 0;
-    }
+}
+else
+{
+    $SSL = 0;
 }
 
 
@@ -940,6 +939,9 @@ sub _forking_spawn
     }
     else
     {
+        $SIG{INT} = $SIG{TERM} = $SIG{HUP} = 'DEFAULT';
+        $SIG{PIPE} = 'DEFAULT';
+
         my $max_clients = 20;  # Make this a config?
     
         foreach (0..$max_clients)
