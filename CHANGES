@@ -1,3 +1,10 @@
+0.2
+===
+  - Fixed bug in read code where it would not finish reading a request.
+  - If IO::Socket::SSL is installed, you can run a secure server.
+  - Added a preforking server type "forking" (default is "single").  You can
+    confiugre the number of child processes via the numproc config option.
+
 0.1
 ===
   - Auto-find the mime.types in the module directories.

@@ -40,7 +40,7 @@ server into another program.
 use Net::HTTPServer;
 
 my $server = new Net::HTTPServer(port=>5000,
-                                   docroot=>"/var/www/site");
+                                 docroot=>"/var/www/site");
 
 $server->Start();
 
@@ -55,7 +55,7 @@ while(1)
 }
 
 $server->Stop();
-                                   
+
 
 =head1 METHODS
 
@@ -79,8 +79,17 @@ and stop.  The config hash takes the options:
                           the index file when a directory is requested.
                           ( Default: ["index.html","index.htm"] )
 
+    log => string       - Path to store the log at.  If you set this to
+                          "STDOUT" then it will display to STDOUT.
+                          ( Default: access.log )
+
     mimetypes => string - Path to an alternate mime.types file.
                           ( Default: included in release )
+
+    numproc => int      - When type is set to "forking", this tells the
+                          server how many child processes to keep
+                          running at all times.
+                          ( Default: 5 )
                                  
     port => int         - Port number to use.  You can optionally
                           specify the string "scan", and the server
@@ -88,6 +97,27 @@ and stop.  The config hash takes the options:
                           it can listen on.  This port is then returned
                           by the Start() method.
                           ( Default: 9000 )
+
+    ssl => 0|1          - Run a secure server using SSL.  You must
+                          specify ssl_key, ssl_cert, and ssl_ca if
+                          set this to 1.
+                          ( Default: 0 )
+
+    ssl_ca => string    - Path to the SSL ca file.
+                          ( Default: undef )
+
+    ssl_cert => string  - Path to the SSL cert file.
+                          ( Default: undef )
+
+    ssl_key => string   - Path to the SSL key file.
+                          ( Default: undef )
+
+    type => string      - What kind of server to create?  Available
+                          types are:
+                            single  - single process/no forking
+                            forking - preforking server
+                          (Default: "single")
+
 
 =head2 Start()
 
@@ -168,11 +198,25 @@ use URI;
 use URI::QueryParam;
 use IO::Socket;
 use IO::Select;
+use FileHandle;
 use POSIX;
 
-use vars qw ($VERSION);
+use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.1";
+$VERSION = "0.2";
+
+#------------------------------------------------------------------------------
+# Do we have IO::Socket::SSL for https support?
+#------------------------------------------------------------------------------
+BEGIN
+{
+    $SSL = 1;
+    eval { use IO::Socket::SSL; };
+    if ($@)
+    {
+        $SSL = 0;
+    }
+}
 
 
 sub new
@@ -190,8 +234,29 @@ sub new
     $self->{CFG}->{CHROOT}    = $self->_arg("chroot",1);
     $self->{CFG}->{DOCROOT}   = $self->_arg("docroot",".");
     $self->{CFG}->{INDEX}     = $self->_arg("index",["index.html","index.htm"]);
+    $self->{CFG}->{LOG}       = $self->_arg("log","access.log");
+    $self->{CFG}->{NUMPROC}   = $self->_arg("numproc",5);
     $self->{CFG}->{MIMETYPES} = $self->_arg("mimetypes",undef);
     $self->{CFG}->{PORT}      = $self->_arg("port",9000);
+    $self->{CFG}->{SSL}       = $self->_arg("ssl",0) && $SSL;
+    $self->{CFG}->{SSL_KEY}   = $self->_arg("ssl_key",undef);
+    $self->{CFG}->{SSL_CERT}  = $self->_arg("ssl_cert",undef);
+    $self->{CFG}->{SSL_CA}    = $self->_arg("ssl_ca",undef);
+    $self->{CFG}->{TYPE}      = $self->_arg("type","single");
+
+    if ($self->{CFG}->{LOG} eq "STDOUT")
+    {
+        $self->{LOG} = \*STDOUT;
+    }
+    else
+    {
+        $self->{LOG} = new FileHandle(">>$self->{CFG}->{LOG}");
+        if (!defined($self->{LOG}))
+        {
+            croak("Could not open log $self->{CFG}->{LOG} for append:\n    $!");
+        }
+    }
+    FileHandle::autoflush($self->{LOG},1);
 
     $self->{DEBUG} = {};
     if (exists($self->{ARGS}->{debug}))
@@ -215,8 +280,6 @@ sub new
             }
         }
     }
-    
-    print "MT: $self->{CFG}->{MIMETYPES}\n";
     
     $self->_mimetypes();
     
@@ -260,12 +323,35 @@ sub Start
     while(!defined($self->{SOCK}))
     {
         $self->_debug("INIT","Attempting to listen on port $port");
-        $self->{SOCK} = new IO::Socket::INET(LocalPort=>$port,
-                                             Proto=>"tcp",
-                                             Listen=>10,
-                                             Reuse=>1,
-                                             Blocking=>0);
-
+        
+        if ($self->{CFG}->{SSL} == 0)
+        {
+            $self->{SOCK} = new IO::Socket::INET(LocalPort=>$port,
+                                                 Proto=>"tcp",
+                                                 Listen=>10,
+                                                 Reuse=>1,
+                                                 Blocking=>0);
+        }
+        else
+        {
+            if (!defined($self->{CFG}->{SSL_KEY}) ||
+                !defined($self->{CFG}->{SSL_KEY}) ||
+                !defined($self->{CFG}->{SSL_KEY}))
+            {
+                croak("You must specify ssl_key, ssl_cert, and ssl_ca if you want to use SSL.");
+                return;
+            }
+            $self->_debug("INIT","Create an SSL socket.");
+            $self->{SOCK} = new IO::Socket::SSL(LocalPort=>$port,
+                                                Proto=>"tcp",
+                                                Listen=>10,
+                                                Reuse=>1,
+                                                Blocking=>0,
+                                                SSL_key_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/server-key.pem",
+                                                SSL_cert_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/server-cert.pem",
+                                                SSL_ca_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/my-ca.pem",
+                                                SSL_verify_mode => 0x01);
+        }
         last if defined($self->{SOCK});
         last if ($port == 9999);
         last if !$scan;
@@ -276,12 +362,28 @@ sub Start
     if (!defined($self->{SOCK}))
     {
         $self->_log("Could not start the server...");
-        carp("Could not start the server: $!");
+        if ($self->{CFG}->{SSL} == 0)
+        {
+            carp("Could not start the server: $!");
+        }
+        else
+        {
+            carp("Could not start the server: ",&IO::Socket::SSL::errstr);
+        }
+
         return;
     }
 
     $self->{SELECT} = new IO::Select($self->{SOCK});
 
+    if ($self->{CFG}->{TYPE} eq "forking")
+    {
+        $self->_debug("INIT","Initializing forking");
+        $SIG{CHLD} = sub{ $self->_forking_reaper(); };
+        $self->{CHILDREN} = {};
+        $self->{NUMCHILDREN} = 0;
+    }
+    
     $self->_log("Server running on port $port");
 
     return $port;
@@ -298,6 +400,11 @@ sub Stop
     my $self = shift;
 
     $self->_debug("INIT","Stopping the server");
+
+    if ($self->{CFG}->{TYPE} eq "forking")
+    {
+        $self->_forking_huntsman();
+    }
     
     $self->{SELECT}->remove($self->{SOCK});
     $self->{SOCK}->close();
@@ -318,55 +425,24 @@ sub Process
     my $timestop = undef;
     $timestop = time + $timeout if defined($timeout);
     
+    $self->_debug("PROC","Process: type($self->{CFG}->{TYPE})");
+
     my $block = 1;
     while($block)
     {
-        $self->_debug("PROC","Waiting...");
-
-        my $client;
-        my $clientSelect;
-
-        my $wait = (defined($timestop) ? $timestop - time : 10);
-        $self->_debug("PROC","Wait for $wait seconds");
-        
-        #------------------------------------------------------------------
-        # Take the request and do the magic
-        #------------------------------------------------------------------
-        if ($self->{SELECT}->can_read($wait))
+        if ($self->{CFG}->{TYPE} eq "single")
         {
-            $self->_debug("PROC","Incoming traffic");
-            $client = $self->{SOCK}->accept();
+            $self->_single_process($timestop);
         }
-
-        if (defined($client))
+        elsif ($self->{CFG}->{TYPE} eq "forking")
         {
-            $self->_debug("PROC","We have a client, let's treat them well.");
-            
-            my $request = $self->_read($client);
-            
-            #------------------------------------------------------------------
-            # Take the request and do the magic
-            #------------------------------------------------------------------
-            if (defined($request))
-            {
-                my ($path,$env) = $self->_ReadRequest($request);
-                my ($code,$headers,$response) = $self->_ProcessRequest($path,$env);
-                $self->_ReturnResponse($client,$code,$headers,$response);
-            }
-            
-            #------------------------------------------------------------------
-            # That's it.  Close down the connection.
-            #------------------------------------------------------------------
-            $client->close();
-            
-            $self->_debug("PROC","Thanks for shopping with us!");
+            $self->_forking_process();
         }
 
         $block = 0 if (defined($timestop) && (($timestop - time) <= 0));
         $self->_debug("PROC","Do we block? $block");
     }
 }
-
 
 
 
@@ -490,7 +566,7 @@ sub _ReadRequest
 
     my ($type,$url) = ($request =~ /(GET|POST)\s+(\S+)\s+/s);
     
-    $self->_log("REQ","type($type) url($url)");
+    $self->_debug("REQ","type($type) url($url)");
     $self->_log("$type $url");
             
     my $uri = new URI($url,"http");
@@ -672,28 +748,13 @@ sub _read
 
     my $timeEnd = time+5;
 
+    my $done = 1;
+    
     while(!$got_request)
     {
-        while( $request !~ /\r?\n\r?\n/s )
+        while( $request !~ /\r?\n\r?\n/s)
         {
-            if ($select->can_read(.01))
-            {
-                my $status = $client->sysread($request,4*POSIX::BUFSIZ,length($request));
-                if (!defined($status))
-                {
-                    $self->_debug("READ","Something... isn't... right... whoa!");
-                }
-                elsif ($status == 0)
-                {
-                    $self->_debug("READ","End of file.");
-                }
-                else
-                {
-                    $self->_debug("READ","status($status)\n");
-                    $self->_debug("READ","request($request)\n");
-                }
-            }
-
+            $self->_read_chunk($select,$client,\$request);
             return if (time >= $timeEnd);
         }
         
@@ -715,12 +776,48 @@ sub _read
             $self->_debug("READ","Ok.  We got a request.");
             $got_request = 1;
         }
-        
-        select(undef,undef,undef,.01);
+        else
+        {
+            $self->_read_chunk($select,$client,\$request);
+            return if (time >= $timeEnd);
+        }
     }
 
     return $request;
 }
+
+
+###############################################################################
+#
+# _read_chunk - Read a chunk at a time.
+#
+###############################################################################
+sub _read_chunk
+{
+    my $self = shift;
+    my $select = shift;
+    my $client = shift;
+    my $request = shift;
+    
+    if ($select->can_read(.01))
+    {
+        my $status = $client->sysread($$request,4*POSIX::BUFSIZ,length($$request));
+        if (!defined($status))
+        {
+            $self->_debug("READ","Something... isn't... right... whoa!");
+        }
+        elsif ($status == 0)
+        {
+            $self->_debug("READ","End of file.");
+        }
+        else
+        {
+            $self->_debug("READ","status($status)\n");
+            $self->_debug("READ","request($$request)\n");
+        }
+    }
+}
+
 
 
 ###############################################################################
@@ -745,6 +842,147 @@ sub _send
     }
 }
 
+
+
+
+###############################################################################
+#+-----------------------------------------------------------------------------
+#| Private Server Functions
+#+-----------------------------------------------------------------------------
+###############################################################################
+
+###############################################################################
+#
+# _process - Handle a client.
+#
+###############################################################################
+sub _process
+{
+    my $self = shift;
+    my $client = shift;
+
+    $self->_debug("PROC","We have a client, let's treat them well.");
+            
+    my $request = $self->_read($client);
+            
+    #------------------------------------------------------------------
+    # Take the request and do the magic
+    #------------------------------------------------------------------
+    if (defined($request))
+    {
+        my ($path,$env) = $self->_ReadRequest($request);
+        my ($code,$headers,$response) = $self->_ProcessRequest($path,$env);
+        $self->_ReturnResponse($client,$code,$headers,$response);
+    }
+    
+    #------------------------------------------------------------------
+    # That's it.  Close down the connection.
+    #------------------------------------------------------------------
+    $client->close();
+    
+    $self->_debug("PROC","Thanks for shopping with us!");
+}
+
+
+sub _forking_huntsman
+{
+    my $self = shift;
+
+    $self->_debug("FORK","Killing children");
+    $self->_log("Killing children");
+    
+    $SIG{CHLD} = 'IGNORE';
+ 
+    if (scalar(keys(%{$self->{CHILDREN}})) > 0)
+    {
+        kill("INT",keys(%{$self->{CHILDREN}}));
+    }
+}
+
+
+sub _forking_process
+{
+    my $self = shift;
+    
+    while($self->{NUMCHILDREN} < $self->{CFG}->{NUMPROC})
+    {
+        $self->_forking_spawn();
+    }
+
+    select(undef,undef,undef,0.1);
+}
+
+
+sub _forking_reaper
+{
+    my $self = shift;
+
+    $SIG{CHLD} = sub{ $self->_forking_reaper(); };
+    my $pid = wait;
+    $self->{NUMCHILDREN}--;
+    delete($self->{CHILDREN}->{$pid});
+}
+
+
+sub _forking_spawn
+{
+    my $self = shift;
+
+    my $pid;
+
+    croak("Could not fork: $!") unless defined ($pid = fork);
+    
+    if ($pid)
+    {
+        $self->{CHILDREN}->{$pid} = 1;
+        $self->{NUMCHILDREN}++;
+        return;
+    }
+    else
+    {
+        my $max_clients = 20;  # Make this a config?
+    
+        foreach (0..$max_clients)
+        {
+            my $client = $self->{SOCK}->accept() or last;
+            $self->_process($client);
+        }
+
+        exit;
+    }
+}
+
+
+###############################################################################
+#
+# _single_process - This is a single thread model.
+#
+###############################################################################
+sub _single_process
+{
+    my $self = shift;
+    my $timestop = shift;
+
+    my $client;
+    my $clientSelect;
+    
+    my $wait = (defined($timestop) ? $timestop - time : 10);
+    $self->_debug("PROC","Wait for $wait seconds");
+    
+    #------------------------------------------------------------------
+    # Take the request and do the magic
+    #------------------------------------------------------------------
+    if ($self->{SELECT}->can_read($wait))
+    {
+        $self->_debug("PROC","Incoming traffic");
+        $client = $self->{SOCK}->accept();
+    }
+    
+    if (defined($client))
+    {
+        $self->_process($client);
+    }
+}
 
 
 
@@ -801,7 +1039,9 @@ sub _debug
     my $zone = shift;
     my (@message) = @_;
     
-    print "$zone:",join("",@message) if exists($self->{DEBUG}->{$zone});
+    print "$zone: ",join("",@message),"\n"
+        if (exists($self->{DEBUG}->{$zone}) ||
+            exists($self->{DEBUG}->{ALL}));
 }
 
 
@@ -846,12 +1086,11 @@ sub _nonblock
 {
     my $self = shift;
     my $socket = shift;
-    my $flags;
 
-    $flags = fcntl($socket, F_GETFL, 0)
-        or die "Can't get flags for socket: $!\n";
+    my $flags = fcntl($socket, F_GETFL, 0)
+        or croak("Can't get flags for socket: $!\n");
     fcntl($socket, F_SETFL, $flags | O_NONBLOCK)
-        or die "Can't make socket nonblocking: $!\n";
+        or croak("Can't make socket nonblocking: $!\n");
 }
 
 
@@ -865,7 +1104,9 @@ sub _log
     my $self = shift;
     my (@message) = @_;
     
-    print $self->_timestamp()," - ",join("",@message),"\n";
+    my $fh = $self->{LOG};
+    
+    print $fh $self->_timestamp()," - ",join("",@message),"\n";
 }
 
 
