@@ -314,7 +314,7 @@ use POSIX;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.9.3";
+$VERSION = "0.9.4";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -750,10 +750,10 @@ sub _HandleAuthBasic
     #-------------------------------------------------------------------------
     # Auth if they did not send an Authorization
     #-------------------------------------------------------------------------
-    return $self->_AuthBasic($realm) if !exists($headers->{Authorization});
+    return $self->_AuthBasic($realm) if !exists($headers->{authorization});
     $self->_debug("AUTH","_HandleAuthBasic: there was an Authorization");
 
-    my ($method,$base64) = split(" ",$headers->{Authorization},2);
+    my ($method,$base64) = split(" ",$headers->{authorization},2);
 
     #-------------------------------------------------------------------------
     # Auth if they did not send a Basic Authorization
@@ -807,10 +807,10 @@ sub _HandleAuthDigest
     #-------------------------------------------------------------------------
     # Auth if they did not send an Authorization
     #-------------------------------------------------------------------------
-    return $self->_AuthDigest(\%digest) if !exists($headers->{Authorization});
+    return $self->_AuthDigest(\%digest) if !exists($headers->{authorization});
     $self->_debug("AUTH","_HandleAuthDigest: there was an Authorization");
 
-    my ($method,$directives) = split(" ",$headers->{Authorization},2);
+    my ($method,$directives) = split(" ",$headers->{authorization},2);
 
     #-------------------------------------------------------------------------
     # Auth if they did not send a Digest Authorization
@@ -891,8 +891,19 @@ sub _ProcessRequest
     #-------------------------------------------------------------------------
     # Catch some common errors/reponses without doing any real hard work
     #-------------------------------------------------------------------------
-    return @{$self->_MethodNotAllowed()} if !exists($ALLOWED{$headers->{'__METHOD__'}});
-    return @{$self->_ExpectationFailed()} if exists($headers->{Expect});
+    return @{$self->_ExpectationFailed()}
+        if exists($headers->{'__EXPECT_FAILURE__'});
+    
+    return @{$self->_MethodNotAllowed()}
+        if !exists($ALLOWED{$headers->{'__METHOD__'}});
+    
+    return @{$self->_BadRequest()}
+        if !exists($headers->{host});
+    
+    return @{$self->_LengthRequired()}
+        if (exists($headers->{'transfer-encoding'}) &&
+            ($headers->{'transfer-encoding'} ne "identity"));
+
     return ("200",{},"") if ($headers->{'__METHOD__'} eq "TRACE");
 
     $url = $self->_chroot($url);
@@ -943,26 +954,48 @@ sub _ReadRequest
     $self->_debug("REQ","_ReadRequest: method($method) url($url)");
     $self->_log("$method $url");
 
-    $headers{'__TRACE__'} = $request if ($method eq "TRACE");
-    
-    #my ($headers,$body) = ($request =~ /^(.+?)\r?\n\r?\n(.*?)$/s);
-    my ($headers,$body) = ($request =~ /^(.+?)\015?\012\015?\012(.*?)$/s);
-    $self->_debug("REQ","_ReadRequest: headers($headers)");
-    $self->_debug("REQ","_ReadRequest: body($body)");
-
-    foreach my $header (split(/[\r\n]+/,$headers))
-    {
-        my ($key,$value) = ($header =~ /^([^\:]+)\s*\:\s*(.+)\s*$/);
-        next unless defined($key);
-
-        $headers{$key} = $value;
-    }
-
     $headers{'__METHOD__'} = $method;
     
     my $uri = new URI($url,"http");
 
     my $path = $uri->path();
+
+    $headers{'__TRACE__'} = $request if ($method eq "TRACE");
+    
+    my ($headers,$body) = ($request =~ /^(.+?)\015?\012\015?\012(.*?)$/s);
+    $self->_debug("REQ","_ReadRequest: headers($headers)");
+    $self->_debug("REQ","_ReadRequest: body($body)");
+
+    my $last_header = "";
+    foreach my $header (split(/[\r\n]+/,$headers))
+    {
+        my $folded;
+        my $key;
+        my $value;
+        
+        ($folded,$value) = ($header =~ /^(\s*)(.+?)\s*$/);
+        if ($folded ne "")
+        {
+            $headers{lc($last_header)} .= $value;
+            $self->_debug("REQ","_ReadRequest: header (".$last_header.")=(".$headers{lc($last_header)}.")");
+            next;
+        }
+        
+        ($key,$value) = ($header =~ /^([^\:]+?)\s*\:\s*(.+?)\s*$/);
+        next unless defined($key);
+
+        $last_header = $key;
+        
+        $headers{lc($key)} = $value;
+        $self->_debug("REQ","_ReadRequest: header ($key)=($value)");
+
+        
+        if (exists($headers{expect}) && ($headers{expect} ne "100-continue"))
+        {
+            $headers{'__EXPECT_FAILURE__'} = 1;
+            return ( $path, \%headers, \%env );
+        }
+    }
 
     foreach my $key ($uri->query_param())
     {
@@ -1012,7 +1045,7 @@ sub _ReturnResponse
     #-------------------------------------------------------------------------
     if (exists($reqheaders->{'Accept'}))
     {
-        if (!$self->_accept($reqheaders->{Accept},$headers->{'Content-Type'}))
+        if (!$self->_accept($reqheaders->{accept},$headers->{'Content-Type'}))
         {
             ($code,$headers,$response) = @{$self->_NotAcceptable()};
         }
@@ -1317,6 +1350,24 @@ sub _Forbidden
 
 ###############################################################################
 #
+# _LengthRequired - 411, we got a Transfer-Encoding that was not set to 
+#                   "identity".
+#
+###############################################################################
+sub _LengthRequired
+{
+    my $self = shift;
+
+    return $self->_Error("411",
+                         {},
+                         "Length Required",
+                         "You must specify the length of the request.",
+                        );
+}
+
+
+###############################################################################
+#
 # _MethodNotAllowed - 405... you must only do what is allowed
 #
 ###############################################################################
@@ -1410,10 +1461,11 @@ sub _read
     my $timeEnd = time+5;
 
     my $done = 1;
+    my $met_expectation = 0;
     
     while(!$got_request)
     {
-        while( $request !~ /\r?\n\r?\n/s)
+        while( $request !~ /\015?\012\015?\012/s)
         {
             $self->_read_chunk($select,$client,\$request);
             return if (time >= $timeEnd);
@@ -1421,13 +1473,28 @@ sub _read
         
         if ($headers eq "")
         {
-            ($headers) = ($request =~ /^(.+?\r?\n\r?\n)/s);
-            if ($headers =~ /Content-Length: (\d+)/)
+            ($headers) = ($request =~ /^(.+?\015?\012\015?\012)/s);
+            if ($headers =~ /^Content-Length\s*:\s*(\d+)\015?\012?$/im)
             {
                 $body_length = $1;
             }
         }
+
         
+        if (!$met_expectation && ($request =~ /^Expect\s*:\s*(.+?)\015?\012?$/im))
+        {
+            my $expect = $1;
+            if ($expect eq "100-continue")
+            {
+                $self->_send($client,"HTTP/1.1 100\n");
+                $met_expectation = 1;
+            }
+            else
+            {
+                return $request."\012\012";
+            }
+        }
+
         $self->_debug("READ","_read: length: request (",length($request),")");
         $self->_debug("READ","_read: length: headers (",length($headers),")");
         $self->_debug("READ","_read: length: body    (",$body_length,")");
@@ -1439,7 +1506,9 @@ sub _read
         }
         else
         {
-            $self->_read_chunk($select,$client,\$request);
+            my $status = $self->_read_chunk($select,$client,\$request);
+            return unless defined($status);
+            $got_request = 1 if ($status == 0);
             return if (time >= $timeEnd);
         }
     }
@@ -1476,7 +1545,11 @@ sub _read_chunk
             $self->_debug("READ","_read_chunk: status($status)\n");
             $self->_debug("READ","_read_chunk: request($$request)\n");
         }
+
+        return $status;
     }
+    
+    return 1;
 }
 
 

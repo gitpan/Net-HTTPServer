@@ -5,7 +5,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     'NAME'      => 'Net::HTTPServer',
-    'PREREQ_PM' => { 'URI'  => 0 },
+    'PREREQ_PM' => { 'URI'  => 1.27 },
     'VERSION_FROM'  => 'lib/Net/HTTPServer.pm',
     'dist' => {
         'COMPRESS' => 'gzip --best'
