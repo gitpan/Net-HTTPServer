@@ -145,7 +145,7 @@ use URI::Escape;
 
 use vars qw ( $VERSION );
 
-$VERSION = "1.0";
+$VERSION = "1.0.1";
 
 sub new
 {
@@ -287,7 +287,7 @@ sub _build
     # Format the return headers
     #-------------------------------------------------------------------------
     my $header = "HTTP/1.1 ".$self->{CODE}."\n";
-    foreach my $key (keys(%{$self->{HEADERS}}))
+    foreach my $key (sort {$a cmp $b} keys(%{$self->{HEADERS}}))
     {
         $header .= "$key: ".$self->{HEADERS}->{$key}."\n";
     }
@@ -319,13 +319,13 @@ sub _build
     #-------------------------------------------------------------------------
     # Mmmm.... Cookies....
     #-------------------------------------------------------------------------
-    foreach my $cookie (keys(%{$self->{COOKIES}}))
+    foreach my $cookie (sort {$a cmp $b} keys(%{$self->{COOKIES}}))
     {
         my $value = uri_escape($self->{COOKIES}->{$cookie}->{value});
         
         $header .= "Set-Cookie: $cookie=$value";
         
-        foreach my $key (keys(%{$self->{COOKIES}->{$cookie}}))
+        foreach my $key (sort {$a cmp $b} keys(%{$self->{COOKIES}->{$cookie}}))
         {
             next if ($key eq "value");
             if ($key eq "secure")

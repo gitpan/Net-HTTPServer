@@ -1,3 +1,10 @@
+1.0.1
+=====
+
+  - Fixed Response to normalize the output so that the tests can come out the
+    same for each run.  Basically, cookies were printing out in a different
+    order then what was hard coded in the test.
+
 1.0
 ===
 

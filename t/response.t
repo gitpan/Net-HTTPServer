@@ -25,7 +25,7 @@ is_deeply( \@build, ["HTTP/1.1 200\nTest: test\nSet-Cookie: Test=test\r\n\r\n","
 $response->Cookie("Test","test",expires=>"expires",domain=>"domain",path=>"path",secure=>1);
 
 @build = $response->_build();
-is_deeply( \@build, ["HTTP/1.1 200\nTest: test\nSet-Cookie: Test=test;domain=domain;secure;path=path;expires=expires\r\n\r\n",""] , "_build: Full cookie" );
+is_deeply( \@build, ["HTTP/1.1 200\nTest: test\nSet-Cookie: Test=test;domain=domain;expires=expires;path=path;secure\r\n\r\n",""] , "_build: Full cookie" );
 
 is( $response->Code(), 200, "Code == 200");
 $response->Code(400);
@@ -33,21 +33,21 @@ isnt( $response->Code(), 200, "Code != 200");
 is( $response->Code(), 400, "Code == 400");
 
 @build = $response->_build();
-is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;secure;path=path;expires=expires\r\n\r\n",""] , "_build: New code" );
+is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;expires=expires;path=path;secure\r\n\r\n",""] , "_build: New code" );
 
 is( $response->Body(), "", "Body == " );
 $response->Body("Test body");
 is( $response->Body(), "Test body", "Body == Test body" );
 
 @build = $response->_build();
-is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;secure;path=path;expires=expires\r\n\r\n","Test body"] , "_build: Body" );
+is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;expires=expires;path=path;secure\r\n\r\n","Test body"] , "_build: Body" );
 
 is( $response->Body(), "Test body", "Body == Test body" );
 $response->Clear();
 is( $response->Body(), "", "Body == " );
 
 @build = $response->_build();
-is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;secure;path=path;expires=expires\r\n\r\n",""] , "_build: Clear" );
+is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;expires=expires;path=path;secure\r\n\r\n",""] , "_build: Clear" );
 
 is( $response->Body(), "", "Body == " );
 $response->Print("Test");
@@ -57,7 +57,7 @@ is( $response->Body(), "Test body", "Body == Test body" );
 
 
 @build = $response->_build();
-is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;secure;path=path;expires=expires\r\n\r\n","Test body"] , "_build: Print" );
+is_deeply( \@build, ["HTTP/1.1 400\nTest: test\nSet-Cookie: Test=test;domain=domain;expires=expires;path=path;secure\r\n\r\n","Test body"] , "_build: Print" );
 
 my $response2 = new Net::HTTPServer::Response();
 ok( defined($response2), "new()");

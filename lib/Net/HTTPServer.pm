@@ -392,7 +392,7 @@ use Net::HTTPServer::Request;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "1.0";
+$VERSION = "1.0.1";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;

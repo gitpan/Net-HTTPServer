@@ -125,7 +125,7 @@ use Data::Dumper;
 
 use vars qw ( $VERSION $SESSION_COUNT %data );
 
-$VERSION = "1.0";
+$VERSION = "1.0.1";
 
 $SESSION_COUNT = 0;
 
