@@ -6,6 +6,7 @@ MANIFEST.SKIP
 Makefile.PL
 examples/simple_test.pl
 lib/Net/HTTPServer.pm
+lib/Net/HTTPServer/CaptureSTDOUT.pm
 lib/Net/HTTPServer/Request.pm
 lib/Net/HTTPServer/Response.pm
 lib/Net/HTTPServer/Session.pm
