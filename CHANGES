@@ -1,3 +1,8 @@
+0.8.1
+=====
+  - Big bug.  If you write too fast ten sometimes syswrite returns undef
+    even though it was not *really* an error.  Use select to wait on this.
+    Hopefully this won't create more problems.
 
 0.8
 ===

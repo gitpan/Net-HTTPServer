@@ -203,7 +203,7 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.8";
+$VERSION = "0.8.1";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -262,6 +262,8 @@ sub new
     $self->{DEBUG} = {};
     if (exists($self->{ARGS}->{debug}))
     {
+        $| = 1;
+
         foreach my $zone (@{$self->{ARGS}->{debug}})
         {
             $self->{DEBUG}->{$zone} = 1;
@@ -313,7 +315,7 @@ sub Start
 {
     my $self = shift;
 
-    $self->_debug("INIT","Starting the server");
+    $self->_debug("INIT","Start: Starting the server");
 
     my $port = $self->{CFG}->{PORT};
     my $scan = ($port eq "scan" ? 1 : 0);
@@ -323,7 +325,7 @@ sub Start
 
     while(!defined($self->{SOCK}))
     {
-        $self->_debug("INIT","Attempting to listen on port $port");
+        $self->_debug("INIT","Start: Attempting to listen on port $port");
         
         if ($self->{CFG}->{SSL} == 0)
         {
@@ -342,7 +344,7 @@ sub Start
                 croak("You must specify ssl_key, ssl_cert, and ssl_ca if you want to use SSL.");
                 return;
             }
-            $self->_debug("INIT","Create an SSL socket.");
+            $self->_debug("INIT","Start: Create an SSL socket.");
             $self->{SOCK} = new IO::Socket::SSL(LocalPort=>$port,
                                                 Proto=>"tcp",
                                                 Listen=>10,
@@ -380,7 +382,7 @@ sub Start
 
     if ($self->{CFG}->{TYPE} eq "forking")
     {
-        $self->_debug("INIT","Initializing forking");
+        $self->_debug("INIT","Start: Initializing forking");
         $SIG{CHLD} = sub{ $self->_forking_reaper(); };
         $self->{CHILDREN} = {};
         $self->{NUMCHILDREN} = 0;
@@ -401,7 +403,7 @@ sub Stop
 {
     my $self = shift;
 
-    $self->_debug("INIT","Stopping the server");
+    $self->_debug("INIT","Stop: Stopping the server");
 
     if ($self->{CFG}->{TYPE} eq "forking")
     {
@@ -513,7 +515,7 @@ sub _ServeFile
 
     if (-d $fullpath)
     {
-        $self->_debug("FILE","This is a directory, look for a index file.");
+        $self->_debug("FILE","_ServeFile: This is a directory, look for a index file.");
         my $match = 0;
         foreach my $index (@{$self->{CFG}->{INDEX}})
         {
@@ -533,14 +535,14 @@ sub _ServeFile
                 return $self->_Redirect($path."/");
             }
 
-            $self->_debug("FILE","Show a directory listing.");
+            $self->_debug("FILE","_ServeFile: Show a directory listing.");
             return $self->_DirList($path);
         }
     }
 
     if (!(-f $fullpath))
     {
-        $self->_debug("FILE","404, File not found.  Whoop! Whoop!");
+        $self->_debug("FILE","_ServeFile: 404, File not found.  Whoop! Whoop!");
         return $self->_NotFound();
     }
 
@@ -577,7 +579,7 @@ sub _ReadRequest
 
     my ($type,$url) = ($request =~ /(GET|POST)\s+(\S+)\s+/s);
     
-    $self->_debug("REQ","type($type) url($url)");
+    $self->_debug("REQ","_ReadRequest: type($type) url($url)");
     $self->_log("$type $url");
             
     my $uri = new URI($url,"http");
@@ -591,17 +593,17 @@ sub _ReadRequest
 
     if ($type =~ /^post$/i)
     {
-        $self->_debug("REQ","We got a POST");
-        $self->_debug("REQ","request($request)");
+        $self->_debug("REQ","_ReadRequest: We got a POST");
+        $self->_debug("REQ","_ReadRequest: request($request)");
         my ($body) = ($request =~ /\r?\n\r?\n(.*?)$/s);
-        $self->_debug("REQ","body($body)");
+        $self->_debug("REQ","_ReadRequest: body($body)");
 
         my $post_uri = new URI("?$body","http");
         
         foreach my $key ($post_uri->query_param())
         {
             $env{$key} = $post_uri->query_param($key);
-            $self->_debug("REQ","ENV: $key: $env{$key}");
+            $self->_debug("REQ","_ReadRequest: ENV: $key: $env{$key}");
         }
     }
     
@@ -634,14 +636,14 @@ sub _ReturnResponse
     chomp($header);
     $header .= "\r\n\r\n";
 
-    $self->_debug("RESP","----------------------------------------");
-    $self->_debug("RESP",$header);
+    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
+    $self->_debug("RESP","_ReturnResponse: $header");
     if (($headers->{'Content-Type'} eq "text/html") ||
         ($headers->{'Content-Type'} eq "text/plain"))
     {
-        $self->_debug("RESP",$response);
+        $self->_debug("RESP","_ReturnResponse: $response");
     }
-    $self->_debug("RESP","----------------------------------------");
+    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
     
     return unless defined($self->_send($client,$header));
     return unless defined($self->_send($client,$response));
@@ -778,13 +780,13 @@ sub _read
             }
         }
         
-        $self->_debug("READ","length: request (",length($request),")");
-        $self->_debug("READ","length: headers (",length($headers),")");
-        $self->_debug("READ","length: body    (",$body_length,")");
+        $self->_debug("READ","_read: length: request (",length($request),")");
+        $self->_debug("READ","_read: length: headers (",length($headers),")");
+        $self->_debug("READ","_read: length: body    (",$body_length,")");
         
         if (length($request) == (length($headers) + $body_length))
         {
-            $self->_debug("READ","Ok.  We got a request.");
+            $self->_debug("READ","_read: Ok.  We got a request.");
             $got_request = 1;
         }
         else
@@ -815,16 +817,16 @@ sub _read_chunk
         my $status = $client->sysread($$request,4*POSIX::BUFSIZ,length($$request));
         if (!defined($status))
         {
-            $self->_debug("READ","Something... isn't... right... whoa!");
+            $self->_debug("READ","_read_chunk: Something... isn't... right... whoa!");
         }
         elsif ($status == 0)
         {
-            $self->_debug("READ","End of file.");
+            $self->_debug("READ","_read_chunk: End of file.");
         }
         else
         {
-            $self->_debug("READ","status($status)\n");
-            $self->_debug("READ","request($$request)\n");
+            $self->_debug("READ","_read_chunk: status($status)\n");
+            $self->_debug("READ","_read_chunk: request($$request)\n");
         }
     }
 }
@@ -873,27 +875,28 @@ sub _send_data
     my $sock = shift;
     my $data = shift;
 
-    #$self->_debug("SEND","Send data: ($data)");
+    my $select = new IO::Select($sock);
     
     my $length = length($data);
     my $offset = 0;
-    while ($length != 0)
+    while (($length != 0) && $select->can_write())
     {
+        $self->_debug("SEND","_send_data: offset($offset) length($length)");
         my $written = $sock->syswrite($data,$length,$offset);
         if (defined($written))
         {
-            $self->_debug("SEND","Wrote data. written($written)");
+            $self->_debug("SEND","_send_data: written($written)");
             $length -= $written;
             $offset += $written;
         }
         else
         {
-            $self->_debug("SEND","Error in writing.");
+            $self->_debug("SEND","_send_data: error");
             return;
         }
     }
 
-    $self->_debug("SEND","Sent all data.");
+    $self->_debug("SEND","_send_data: sent all data");
     return 1;
 }
 
@@ -916,7 +919,7 @@ sub _process
     my $self = shift;
     my $client = shift;
 
-    $self->_debug("PROC","We have a client, let's treat them well.");
+    $self->_debug("PROC","_process: We have a client, let's treat them well.");
 
     $client->autoflush(1);
             
@@ -938,7 +941,7 @@ sub _process
     $client->close() if ($self->{CFG}->{SSL} == 0);
     $client->close(SSL_no_shutdown=>1) if ($self->{CFG}->{SSL} == 1);
     
-    $self->_debug("PROC","Thanks for shopping with us!");
+    $self->_debug("PROC","_process: Thanks for shopping with us!");
 }
 
 
@@ -951,7 +954,7 @@ sub _forking_huntsman
 {
     my $self = shift;
 
-    $self->_debug("FORK","Killing children");
+    $self->_debug("FORK","_forking_hunstman: Killing children");
     $self->_log("Killing children");
     
     $SIG{CHLD} = 'IGNORE';
@@ -1053,14 +1056,14 @@ sub _single_process
     my $clientSelect;
     
     my $wait = (defined($timestop) ? $timestop - time : 10);
-    $self->_debug("PROC","Wait for $wait seconds");
+    $self->_debug("PROC","_single_process: Wait for $wait seconds");
     
     #------------------------------------------------------------------
     # Take the request and do the magic
     #------------------------------------------------------------------
     if ($self->{SELECT}->can_read($wait))
     {
-        $self->_debug("PROC","Incoming traffic");
+        $self->_debug("PROC","_single_process: Incoming traffic");
         $client = $self->{SOCK}->accept();
     }
     
