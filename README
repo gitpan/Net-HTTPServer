@@ -1,4 +1,4 @@
-Net::HTTPServer v0.1
+Net::HTTPServer
 
 This is a light weight HTTP server that serves files as well as attaching
 function calls to URL requests.  This allows you to do a lot of things:
@@ -18,7 +18,10 @@ reatmon@mail.com
 
 
 REQUIREMENTS
-  - URI          - Handles all of the URL magic
+  - URI              - Handles all of the URL magic
+
+OPTIONAL
+  - IO::Socket::SSL  - Allows for a secure web server
 
 INSTALLATION
 
@@ -28,11 +31,11 @@ INSTALLATION
 
 STATUS
 
-  This is the first release.  I built this for a couple of side projects I
-wanted to tackle, and wanted to make it available to everyone.  Please give
-me feedback.  I would love to make this more and more feature rich, while
-still keeping it light weight.
+  So far, no major performance or stability bugs.  I built this for a couple
+of side projects I wanted to tackle, and wanted to make it available to
+everyone.  Please give me feedback.  I would love to make this more and more
+feature rich, while still keeping it light weight.
 
 DATE
-  2003/06/26
+  2003/07/03
 

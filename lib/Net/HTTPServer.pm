@@ -203,7 +203,7 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.4";
+$VERSION = "0.5";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -218,8 +218,6 @@ else
 {
     $SSL = 0;
 }
-
-print "ssl($SSL)\n";
 
 
 sub new
@@ -338,8 +336,8 @@ sub Start
         else
         {
             if (!defined($self->{CFG}->{SSL_KEY}) ||
-                !defined($self->{CFG}->{SSL_KEY}) ||
-                !defined($self->{CFG}->{SSL_KEY}))
+                !defined($self->{CFG}->{SSL_CERT}) ||
+                !defined($self->{CFG}->{SSL_CA}))
             {
                 croak("You must specify ssl_key, ssl_cert, and ssl_ca if you want to use SSL.");
                 return;
@@ -350,10 +348,10 @@ sub Start
                                                 Listen=>10,
                                                 Reuse=>1,
                                                 Blocking=>0,
-                                                SSL_key_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/server-key.pem",
-                                                SSL_cert_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/server-cert.pem",
-                                                SSL_ca_file => "/home/reatmon/devel/libs/IO-Socket-SSL-0.94/certs/my-ca.pem",
-                                                SSL_verify_mode => 0x01);
+                                                SSL_key_file=>$self->{CFG}->{SSL_KEY},
+                                                SSL_cert_file=>$self->{CFG}->{SSL_CERT},
+                                                SSL_ca_file=>$self->{CFG}->{SSL_CA},
+                                                SSL_verify_mode=> 0x01);
         }
         last if defined($self->{SOCK});
         last if ($port == 9999);

@@ -1,3 +1,8 @@
+o.5
+===
+  - Fixed bug with SSL support.  I had hard coded paths and a bad check
+    for the SSL options.
+
 0.4
 ===
   - Allow for the reponse to be a FileHandle that _send will read and send
