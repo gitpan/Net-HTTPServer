@@ -203,7 +203,7 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.7";
+$VERSION = "0.8";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -643,8 +643,8 @@ sub _ReturnResponse
     }
     $self->_debug("RESP","----------------------------------------");
     
-    $self->_send($client,$header);
-    $self->_send($client,$response);
+    return unless defined($self->_send($client,$header));
+    return unless defined($self->_send($client,$response));
 }
 
 
@@ -845,29 +845,56 @@ sub _send
 
     if (ref($data) eq "")
     {
-        my $length = length($data);
-        my $offset = 0;
-        while ($length != 0)
-        {
-            my $written = $sock->syswrite($data,$length,$offset);
-            $length -= $written;
-            $offset += $written;
-        }
+        return unless defined($self->_send_data($sock,$data));
     }
     if (ref($data) eq "FileHandle")
     {
         while(my $temp = <$data>)
         {
-            my $length = length($temp);
-            my $offset = 0;
-            while ($length != 0)
-            {
-                my $written = $sock->syswrite($temp,$length,$offset);
-                $length -= $written;
-                $offset += $written;
-            }
+            return unless defined($self->_send_data($sock,$temp));
         }
     }
+
+    return 1;
+}
+
+
+
+
+###############################################################################
+#
+# _send_data - helper function to keep sending until all of the data has been
+#              returned.
+#
+###############################################################################
+sub _send_data
+{
+    my $self = shift;
+    my $sock = shift;
+    my $data = shift;
+
+    #$self->_debug("SEND","Send data: ($data)");
+    
+    my $length = length($data);
+    my $offset = 0;
+    while ($length != 0)
+    {
+        my $written = $sock->syswrite($data,$length,$offset);
+        if (defined($written))
+        {
+            $self->_debug("SEND","Wrote data. written($written)");
+            $length -= $written;
+            $offset += $written;
+        }
+        else
+        {
+            $self->_debug("SEND","Error in writing.");
+            return;
+        }
+    }
+
+    $self->_debug("SEND","Sent all data.");
+    return 1;
 }
 
 
@@ -1145,11 +1172,25 @@ sub _nonblock
 {
     my $self = shift;
     my $socket = shift;
+    
+    #--------------------------------------------------------------------------
+    # Code copied from POE::Wheel::SocketFactory...
+    # Win32 does things one way...
+    #--------------------------------------------------------------------------
+    if ($^O eq "MSWin32")
+    {
+        ioctl( $socket, 0x80000000 | (4 << 16) | (ord('f') << 8) | 126, 1) ||
+            croak("Can't make socket nonblocking (win32): $!");
+        return;
+    }
 
-    my $flags = fcntl($socket, F_GETFL, 0)
-        or croak("Can't get flags for socket: $!\n");
-    fcntl($socket, F_SETFL, $flags | O_NONBLOCK)
-        or croak("Can't make socket nonblocking: $!\n");
+    #--------------------------------------------------------------------------
+    # And UNIX does them another
+    #--------------------------------------------------------------------------
+    my $flags = fcntl($socket, F_GETFL, 0) ||
+        croak("Can't get flags for socket: $!\n");
+    fcntl($socket, F_SETFL, $flags | O_NONBLOCK) ||
+        croak("Can't make socket nonblocking: $!\n");
 }
 
 

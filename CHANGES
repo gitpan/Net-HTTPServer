@@ -1,3 +1,11 @@
+
+0.8
+===
+  - Fixed but in writing.  If there was an error on write the server was
+    sent spinning into an endless loop.
+  - Fixed bug in win32 nonblocking.  Thanks to Bytewolf and dliouville
+    for finding this.
+
 0.7
 ===
   - Fixed IO::Socket::SSL interface problem.  Accessing multiple pages
