@@ -1,3 +1,12 @@
+1.0
+===
+
+  - Added PHP style session support.
+  
+  - Moved to more object oriented model: object for request, object for reply.
+
+  - Added cookie support.
+
 0.9.4
 =====
 

@@ -1,41 +1,77 @@
 #!/usr/bin/perl -w
 
 use strict;
-use lib "../blib/lib";
 use Net::HTTPServer;
 
 my $server = new Net::HTTPServer();
 
-$server->RegisterURL("/foo/bar.pl",\&test);
+$server->RegisterURL("/test/env",\&test_env);
+$server->RegisterURL("/test/auth",\&test_auth);
+$server->RegisterAuth("basic","/test/auth","Test Auth",\&auth);
 
-$server->Start();
-
-$server->Process();
-
-sub test
+if ( $server->Start() )
 {
-    my $env = shift;  # hash reference
+    $server->Process();
+}
+else
+{
+    print "Could not start the server.\n";
+}
 
-    my $res;
-    $res  = "<html>\n";
-    $res .= "  <head>\n";
-    $res .= "    <title>This is a test</title>\n";
-    $res .= "  </head>\n";
-    $res .= "  <body>\n";
-    $res .= "    <pre>\n";
 
-    foreach my $var (keys(%{$env}))
+sub test_env
+{
+    my $req = shift;             # Net::HTTPServer::Request object
+    my $res = $req->Response();  # Net::HTTPServer::Response object
+    
+    $res->Print("<html>\n");
+    $res->Print("  <head>\n");
+    $res->Print("    <title>This is a test</title>\n");
+    $res->Print("  </head>\n");
+    $res->Print("  <body>\n");
+    $res->Print("    <pre>\n");
+    
+    foreach my $var (keys(%{$req->Env()}))
     {
-        $res .= "$var -> ".$env->{$var}."\n";
+        $res->Print("$var -> ".$req->Env($var)."\n");
     }
     
-    $res .= "    </pre>\n";
-    $res .= "  </body>\n";
-    $res .= "</html>\n";
+    $res->Print("    </pre>\n");
+    $res->Print("  </body>\n");
+    $res->Print("</html>\n");
     
-    return ["200",   # HTTP Response code (200 = Ok)
-            {},      # Headers to send back
-            $res     # Whatever you are sending back
-           ];
+    return $res;
+}
+
+
+sub auth
+{
+    my $url = shift;
+    my $user = shift;
+
+    if ($user eq "test")
+    {
+        return ("200","pass");
+    }
+
+    return ("401");
+}
+
+
+sub test_auth
+{
+    my $req = shift;             # Net::HTTPServer::Request object
+    my $res = $req->Response();  # Net::HTTPServer::Response object
+    
+    $res->Print("<html>\n");
+    $res->Print("  <head>\n");
+    $res->Print("    <title>This is a test</title>\n");
+    $res->Print("  </head>\n");
+    $res->Print("  <body>\n");
+    $res->Print("    This page required authentication.\n");
+    $res->Print("  </body>\n");
+    $res->Print("</html>\n");
+    
+    return $res;
 }
 

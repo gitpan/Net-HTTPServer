@@ -15,7 +15,7 @@
 #  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA  02111-1307, USA.
 #
-#  Copyright (C) 2003 Ryan Eatmon
+#  Copyright (C) 2003-2004 Ryan Eatmon
 #
 ##############################################################################
 package Net::HTTPServer;
@@ -71,6 +71,10 @@ and stop.  The config hash takes the options:
                           if this is specified.
                           ( Default: 1 )
 
+    datadir => string   - Path on the filesystem where you want to
+                          store the server side session files.
+                          ( Deault: "/tmp/nethttpserver.sessions" )
+
     docroot => string   - Path on the filesystem that you want to be
                           the document root "/" for the server.
                           ( Default: "." )
@@ -90,6 +94,12 @@ and stop.  The config hash takes the options:
                           server how many child processes to keep
                           running at all times.
                           ( Default: 5 )
+
+    oldrequests => 0|1  - With the new request objects, old programs
+                          will not work.  To postpone updating your
+                          code, just set this to 1 and your programs
+                          should work again.
+                          ( Default: 0 )
                                  
     port => int         - Port number to use.  You can optionally
                           specify the string "scan", and the server
@@ -98,6 +108,9 @@ and stop.  The config hash takes the options:
                           by the Start() method.
                           ( Default: 9000 )
 
+    sessions => 0|1     - Enable/disable server side session support.
+                          ( Default: 0 )
+    
     ssl => 0|1          - Run a secure server using SSL.  You must
                           specify ssl_key, ssl_cert, and ssl_ca if
                           set this to 1.
@@ -248,29 +261,26 @@ it can do something meaningful with them.  A simple handler looks like:
 
   sub test
   {
-      my $env = shift;  # hash reference
+      my $req = shift;             # Net::HTTPServer::Request object
+      my $res = $req->Response();  # Net::HTTPServer::Response object
 
-      my $res;
-      $res  = "<html>\n";
-      $res .= "  <head>\n";
-      $res .= "    <title>This is a test</title>\n";
-      $res .= "  </head>\n";
-      $res .= "  <body>\n";
-      $res .= "    <pre>\n";
+      $res->Print("<html>\n");
+      $res->Print("  <head>\n");
+      $res->Print("    <title>This is a test</title>\n");
+      $res->Print("  </head>\n");
+      $res->Print("  <body>\n");
+      $res->Print("    <pre>\n");
 
-      foreach my $var (keys(%{$env}))
+      foreach my $var (keys(%{$req->Env()}))
       {
-          $res .= "$var -> ".$env->{$var}."\n";
+          $res->Print("$var -> ".$req->Env($var)."\n");
       }
       
-      $res .= "    </pre>\n";
-      $res .= "  </body>\n";
-      $res .= "</html>\n";
+      $res->Print("    </pre>\n");
+      $res->Print("  </body>\n");
+      $res->Print("</html>\n");
 
-      return ["200",   # HTTP Response code (200 = Ok)
-              {},      # Headers to send back
-              $res     # Whatever you are sending back
-             ];
+      return $res;
   }
   
 Start a server with that and point your browser to:
@@ -292,29 +302,97 @@ unable to start.
 
 Shuts down the socket connection and cleans up after itself.
 
+=head1 SESSIONS
+
+Net::HTTPServer provides support for server-side sessions much like PHP's
+session model.  A handler that you register can ask that the request object
+start a new session.  It will check a cookie value to see if an existing
+session exists, if not it will create a new one with a unique key.
+
+You can store any arbitrary Perl data structures in the session.  The next
+time the user accesses your handler, you can restore those values and have
+them available again.  When you are done, simple destroy the session.
+
+=head1 HEADERS
+
+Net::HTTPServer sets a few headers automatically.  Due to the timing of
+events, you cannot get to those headers programatically, so we will
+discuss them general.
+
+Obviously for file serving, errors, and authentication it sends back
+all of the appropriate headers.  You likely do not need to worry about
+those cases.  In RegisterURL mode though, here are the headers that are
+added:
+
+   Accept-Ranges: none                    (not supported)
+   Allow: GET, HEAD, POST, TRACE
+   Content-Length: <length of response>
+   Connection: close                      (not supported)
+   Content-Type: text/html                (unless you set it)
+   Date: <current time>
+   Server: <version of Net::HTTPServer
+            plus what you add using the
+            AddServerTokens method>
+
+If you have any other questions about what is being sent, try using
+DEBUG (later section).
+
+=head1 DEBUG
+
+When you are writing your application you might see behavior that is
+unexpected.  I've found it useful to check some debugging statements
+that I have in the module to see what it is doing.  If you want to
+turn debugging on simply provide the debug => [ zones ] option when
+creating the server.  You can optionally specify a file to write
+the log into instead of STDOUT by specifying the debuglog => file
+option.
+
+I've coded the modules debugging using the concept of zones.  Each
+zone (or task) has it's own debug messages and you can enable/disable
+them as you want to.  Here are the list of available zones:
+
+  INIT - Initializing the sever
+  PROC - Processing a request
+  REQ  - Parsing requests
+  RESP - Returning the response (file contents are not printed)
+  AUTH - Handling and authentication request
+  FILE - Handling a file system request.
+  READ - Low-level read
+  SEND - Low-level send (even prints binary characters)
+  ALL  - Turn all of the above on.
+
+So as an example:
+
+  my $server = new Net::HTTPServer(..., debug=>["REQ","RESP"],...);
+
+That would show all requests and responses.
+
 =head1 AUTHOR
 
 Ryan Eatmon
 
 =head1 COPYRIGHT
 
-This module is free software, you can redistribute it and/or modify
-it under the same terms as Perl itself.
+Copyright (c) 2003-2004 Ryan Eatmon <reatmon@mail.com>. All rights
+reserved.  This program is free software; you can redistribute it
+and/or modify it under the same terms as Perl itself.
 
 =cut
   
 use strict;
 use Carp;
-use URI;
-use URI::QueryParam;
 use IO::Socket;
 use IO::Select;
 use FileHandle;
+use File::Path;
 use POSIX;
+use Net::HTTPServer::Session;
+use Net::HTTPServer::Response;
+use Net::HTTPServer::Request;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.9.4";
+$VERSION = "1.0";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -376,21 +454,25 @@ sub new
 
     $self->{ARGS} = \%args;
 
-    $self->{CFG}->{CHROOT}    = $self->_arg("chroot",1);
-    $self->{CFG}->{DOCROOT}   = $self->_arg("docroot",".");
-    $self->{CFG}->{INDEX}     = $self->_arg("index",["index.html","index.htm"]);
-    $self->{CFG}->{LOG}       = $self->_arg("log","access.log");
-    $self->{CFG}->{NUMPROC}   = $self->_arg("numproc",5);
-    $self->{CFG}->{MIMETYPES} = $self->_arg("mimetypes",undef);
-    $self->{CFG}->{PORT}      = $self->_arg("port",9000);
-    $self->{CFG}->{SSL}       = $self->_arg("ssl",0) && $SSL;
-    $self->{CFG}->{SSL_KEY}   = $self->_arg("ssl_key",undef);
-    $self->{CFG}->{SSL_CERT}  = $self->_arg("ssl_cert",undef);
-    $self->{CFG}->{SSL_CA}    = $self->_arg("ssl_ca",undef);
-    $self->{CFG}->{TYPE}      = $self->_arg("type","single");
+    $self->{CFG}->{CHROOT}      = $self->_arg("chroot",1);
+    $self->{CFG}->{DATADIR}     = $self->_arg("datadir","/tmp/nethttpserver.sessions");
+    $self->{CFG}->{DOCROOT}     = $self->_arg("docroot",".");
+    $self->{CFG}->{INDEX}       = $self->_arg("index",["index.html","index.htm"]);
+    $self->{CFG}->{LOG}         = $self->_arg("log","access.log");
+    $self->{CFG}->{MIMETYPES}   = $self->_arg("mimetypes",undef);
+    $self->{CFG}->{NUMPROC}     = $self->_arg("numproc",5);
+    $self->{CFG}->{OLDREQUEST}  = $self->_arg("oldrequest",0);
+    $self->{CFG}->{PORT}        = $self->_arg("port",9000);
+    $self->{CFG}->{SESSIONS}    = $self->_arg("sessions",0);
+    $self->{CFG}->{SSL}         = $self->_arg("ssl",0) && $SSL;
+    $self->{CFG}->{SSL_KEY}     = $self->_arg("ssl_key",undef);
+    $self->{CFG}->{SSL_CERT}    = $self->_arg("ssl_cert",undef);
+    $self->{CFG}->{SSL_CA}      = $self->_arg("ssl_ca",undef);
+    $self->{CFG}->{TYPE}        = $self->_arg("type","single");
 
     if ($self->{CFG}->{LOG} eq "STDOUT")
     {
+        $| = 1;
         $self->{LOG} = \*STDOUT;
     }
     else
@@ -403,15 +485,33 @@ sub new
     }
     FileHandle::autoflush($self->{LOG},1);
 
-    $self->{DEBUG} = {};
-    if (exists($self->{ARGS}->{debug}))
-    {
-        $| = 1;
+    $self->{DEBUGZONES} = {};
+    $self->{DEBUG} = $self->_arg("debug",[]);
+    $self->{DEBUGLOG} = $self->_arg("debuglog","STDOUT");
 
-        foreach my $zone (@{$self->{ARGS}->{debug}})
+    if ((ref($self->{DEBUG}) eq "ARRAY") && ($#{$self->{DEBUG}} > -1))
+    {
+
+        foreach my $zone (@{$self->{DEBUG}})
         {
-            $self->{DEBUG}->{$zone} = 1;
+            $self->{DEBUGZONES}->{$zone} = 1;
         }
+
+        if ($self->{DEBUGLOG} eq "STDOUT")
+        {
+            $| = 1;
+            $self->{DEBUGLOG} = \*STDOUT;
+        }
+        else
+        {
+            my $log = $self->{DEBUGLOG};
+            $self->{DEBUGLOG} = new FileHandle(">$log");
+            if (!defined($self->{DEBUGLOG}))
+            {
+                croak("Could not open log $log for write:\n    $!");
+            }
+        }
+        FileHandle::autoflush($self->{DEBUGLOG},1);
     }
 
     delete($self->{ARGS});
@@ -438,6 +538,21 @@ sub new
     $self->{AUTH} = {};
     $self->{CALLBACKS} = {};
     $self->{SERVER_TOKENS} = [ "Net::HTTPServer/$VERSION" ];
+
+    if ($self->{CFG}->{SESSIONS})
+    {
+        if (-d $self->{CFG}->{DATADIR})
+        {
+            File::Path::rmtree($self->{CFG}->{DATADIR});
+        }
+        
+        if (!(-d $self->{CFG}->{DATADIR}))
+        {
+            File::Path::mkpath($self->{CFG}->{DATADIR},0,0700);
+        }
+    }
+
+    #XXX Clean up the datadir of files older than a certain time.
 
     return $self;
 }
@@ -706,23 +821,21 @@ sub Stop
 sub _HandleAuth
 {
     my $self = shift;
-    my $url = shift;
-    my $headers = shift;
-    my $env = shift;
-
-    my $authURL = $self->_checkAuth($url);
+    my $requestObj = shift;
+    
+    my $authURL = $self->_checkAuth($requestObj->Path());
     return unless defined($authURL);
 
-    $self->_debug("AUTH","_HandleAuth: url($url)");
+    $self->_debug("AUTH","_HandleAuth: url(".$requestObj->Path().")");
     $self->_debug("AUTH","_HandleAuth: authURL($authURL) method($self->{AUTH}->{$authURL}->{method})");
 
     if ($self->{AUTH}->{$authURL}->{method} eq "basic")
     {
-        return $self->_HandleAuthBasic($authURL,$url,$headers,$env);
+        return $self->_HandleAuthBasic($authURL,$requestObj);
     }
     elsif ($self->{AUTH}->{$authURL}->{method} eq "digest")
     {
-        return $self->_HandleAuthDigest($authURL,$url,$headers,$env);
+        return $self->_HandleAuthDigest($authURL,$requestObj);
     }
 
     return;
@@ -739,9 +852,7 @@ sub _HandleAuthBasic
 {
     my $self = shift;
     my $authURL = shift;
-    my $url = shift;
-    my $headers = shift;
-    my $env = shift;
+    my $requestObj = shift;
 
     my $realm = $self->{AUTH}->{$authURL}->{realm};
 
@@ -750,10 +861,10 @@ sub _HandleAuthBasic
     #-------------------------------------------------------------------------
     # Auth if they did not send an Authorization
     #-------------------------------------------------------------------------
-    return $self->_AuthBasic($realm) if !exists($headers->{authorization});
+    return $self->_AuthBasic($realm) unless $requestObj->Header("Authorization");
     $self->_debug("AUTH","_HandleAuthBasic: there was an Authorization");
 
-    my ($method,$base64) = split(" ",$headers->{authorization},2);
+    my ($method,$base64) = split(" ",$requestObj->Header("Authorization"),2);
 
     #-------------------------------------------------------------------------
     # Auth if they did not send a Basic Authorization
@@ -764,7 +875,7 @@ sub _HandleAuthBasic
     my ($user,$password) = split(":",MIME::Base64::decode($base64));
 
     my ($code,$real_password) =
-        &{$self->{AUTH}->{$authURL}->{callback}}($url,$user);
+        &{$self->{AUTH}->{$authURL}->{callback}}($requestObj->Path(),$user);
     $self->_debug("AUTH","_HandleAuthBasic: callback return code($code)");
 
     #-------------------------------------------------------------------------
@@ -777,7 +888,7 @@ sub _HandleAuthBasic
     #-------------------------------------------------------------------------
     # We authed, so set REMOTE_USER in the env hash and return
     #-------------------------------------------------------------------------
-    $env->{'REMOTE_USER'} = $user;
+    $requestObj->Env("REMOTE_USER",$user);
     return;
 }
 
@@ -792,9 +903,7 @@ sub _HandleAuthDigest
 {
     my $self = shift;
     my $authURL = shift;
-    my $url = shift;
-    my $headers = shift;
-    my $env = shift;
+    my $requestObj = shift;
 
     my %digest;
     $digest{algorithm} = "MD5";
@@ -807,10 +916,10 @@ sub _HandleAuthDigest
     #-------------------------------------------------------------------------
     # Auth if they did not send an Authorization
     #-------------------------------------------------------------------------
-    return $self->_AuthDigest(\%digest) if !exists($headers->{authorization});
+    return $self->_AuthDigest(\%digest) unless $requestObj->Header("Authorization");
     $self->_debug("AUTH","_HandleAuthDigest: there was an Authorization");
 
-    my ($method,$directives) = split(" ",$headers->{authorization},2);
+    my ($method,$directives) = split(" ",$requestObj->Header("Authorization"),2);
 
     #-------------------------------------------------------------------------
     # Auth if they did not send a Digest Authorization
@@ -828,14 +937,14 @@ sub _HandleAuthDigest
     #-------------------------------------------------------------------------
     # Make sure that the uri in the auth and the request are the same.
     #-------------------------------------------------------------------------
-    return $self->_BadRequest() if ($url ne $authorization{uri});
+    return $self->_BadRequest() if ($requestObj->URL() ne $authorization{uri});
 
     my ($code,$real_password) =
-        &{$self->{AUTH}->{$authURL}->{callback}}($url,$authorization{username});
+        &{$self->{AUTH}->{$authURL}->{callback}}($requestObj->Path(),$authorization{username});
     $self->_debug("AUTH","_HandleAuthDigest: callback return code($code)");
 
     my $ha1 = $self->_digest_HA1(\%authorization,$real_password);
-    my $ha2 = $self->_digest_HA2(\%authorization,$headers->{'__METHOD__'});
+    my $ha2 = $self->_digest_HA2(\%authorization,$requestObj->Method());
     my $kd = $self->_digest_KD(\%authorization,$ha1,$ha2);
 
     #-------------------------------------------------------------------------
@@ -870,7 +979,7 @@ sub _HandleAuthDigest
     #-------------------------------------------------------------------------
     # We authed, so set REMOTE_USER in the env hash and return
     #-------------------------------------------------------------------------
-    $env->{'REMOTE_USER'} = $authorization{username};
+    $requestObj->Env("REMOTE_USER",$authorization{username});
     return;
 }
 
@@ -884,55 +993,63 @@ sub _HandleAuthDigest
 sub _ProcessRequest
 {
     my $self = shift;
-    my $url = shift;
-    my $headers = shift;
-    my $env = shift;
+    my $requestObj = shift;
 
     #-------------------------------------------------------------------------
     # Catch some common errors/reponses without doing any real hard work
     #-------------------------------------------------------------------------
     return @{$self->_ExpectationFailed()}
-        if exists($headers->{'__EXPECT_FAILURE__'});
+        if ($requestObj->_failure() eq "expect");
     
     return @{$self->_MethodNotAllowed()}
-        if !exists($ALLOWED{$headers->{'__METHOD__'}});
+        unless exists($ALLOWED{$requestObj->Method()});
     
     return @{$self->_BadRequest()}
-        if !exists($headers->{host});
+        unless $requestObj->Header("Host");
     
     return @{$self->_LengthRequired()}
-        if (exists($headers->{'transfer-encoding'}) &&
-            ($headers->{'transfer-encoding'} ne "identity"));
+        if ($requestObj->Header("Transfer-Encoding") &&
+            $requestObj->Header("Transfer-Encoding") ne "identity");
 
-    return ("200",{},"") if ($headers->{'__METHOD__'} eq "TRACE");
+    return new Net::HTTPServer::Response()
+        if ($requestObj->Method() eq "TRACE");
 
-    $url = $self->_chroot($url);
+    my $responseObj;
 
-    my $response;
-
-    if (exists($self->{CALLBACKS}->{$url}))
+    if (exists($self->{CALLBACKS}->{$requestObj->Path()}))
     {
-        my $auth = $self->_HandleAuth($url,$headers,$env);
-        return @{$auth} if defined($auth);
+        my $auth = $self->_HandleAuth($requestObj);
+        return $auth if defined($auth);
 
         $self->_debug("PROC","_ProcessRequest: Callback");
-        $response = &{$self->{CALLBACKS}->{$url}}($env);
+        if ($self->{CFG}->{OLDREQUEST})
+        {
+            my $response = &{$self->{CALLBACKS}->{$requestObj->Path()}}($requestObj->Env(),$requestObj->Cookie());
+            $responseObj = new Net::HTTPServer::Response(code=>$response->[0],
+                                                         headers=>$response->[1],
+                                                         body=>$response->[2],
+                                                        );
+        }
+        else
+        {
+            $responseObj = &{$self->{CALLBACKS}->{$requestObj->Path()}}($requestObj);
+        }
     }
-    elsif (-e $self->{CFG}->{DOCROOT}."/$url")
+    elsif (-e $self->{CFG}->{DOCROOT}."/".$requestObj->Path())
     {
-        my $auth = $self->_HandleAuth($url,$headers,$env);
-        return @{$auth} if defined($auth);
+        my $auth = $self->_HandleAuth($requestObj);
+        return $auth if defined($auth);
 
         $self->_debug("PROC","_ProcessRequest: File");
-        $response = $self->_ServeFile($url);        
+        $responseObj = $self->_ServeFile($requestObj->Path());        
     }
     else
     {
         $self->_debug("PROC","_ProcessRequest: Not found");
-        $response = $self->_NotFound();
+        $responseObj = $self->_NotFound();
     }
 
-    return @{$response};
+    return $responseObj;
 }
 
 
@@ -946,76 +1063,17 @@ sub _ReadRequest
     my $self = shift;
     my $request = shift;
     
-    my %headers;
-    my %env;
+    my $requestObj =
+        new Net::HTTPServer::Request(chroot=>$self->{CFG}->{CHROOT},
+                                     request=>$request,
+                                     server=>$self,
+                                    );
 
-    my ($method,$url) = ($request =~ /(\S+)\s+(\S+)\s+/s);
-    
-    $self->_debug("REQ","_ReadRequest: method($method) url($url)");
-    $self->_log("$method $url");
+    $self->_debug("REQ","_ReadRequest: method(".$requestObj->Method().") url(".$requestObj->URL().")");
+    $self->_debug("REQ","_ReadRequest: request(".$requestObj->Request().")");
+    $self->_log($requestObj->Method()." ".$requestObj->URL());
 
-    $headers{'__METHOD__'} = $method;
-    
-    my $uri = new URI($url,"http");
-
-    my $path = $uri->path();
-
-    $headers{'__TRACE__'} = $request if ($method eq "TRACE");
-    
-    my ($headers,$body) = ($request =~ /^(.+?)\015?\012\015?\012(.*?)$/s);
-    $self->_debug("REQ","_ReadRequest: headers($headers)");
-    $self->_debug("REQ","_ReadRequest: body($body)");
-
-    my $last_header = "";
-    foreach my $header (split(/[\r\n]+/,$headers))
-    {
-        my $folded;
-        my $key;
-        my $value;
-        
-        ($folded,$value) = ($header =~ /^(\s*)(.+?)\s*$/);
-        if ($folded ne "")
-        {
-            $headers{lc($last_header)} .= $value;
-            $self->_debug("REQ","_ReadRequest: header (".$last_header.")=(".$headers{lc($last_header)}.")");
-            next;
-        }
-        
-        ($key,$value) = ($header =~ /^([^\:]+?)\s*\:\s*(.+?)\s*$/);
-        next unless defined($key);
-
-        $last_header = $key;
-        
-        $headers{lc($key)} = $value;
-        $self->_debug("REQ","_ReadRequest: header ($key)=($value)");
-
-        
-        if (exists($headers{expect}) && ($headers{expect} ne "100-continue"))
-        {
-            $headers{'__EXPECT_FAILURE__'} = 1;
-            return ( $path, \%headers, \%env );
-        }
-    }
-
-    foreach my $key ($uri->query_param())
-    {
-        $env{$key} = $uri->query_param($key);
-    }
-
-    if ($method eq "POST")
-    {
-        $self->_debug("REQ","_ReadRequest: We got a POST");
-
-        my $post_uri = new URI("?$body","http");
-
-        foreach my $key ($post_uri->query_param())
-        {
-            $env{$key} = $post_uri->query_param($key);
-            $self->_debug("REQ","_ReadRequest: ENV: $key: $env{$key}");
-        }
-    }
-    
-    return ( $path, \%headers, \%env );
+    return $requestObj;
 }
 
 
@@ -1029,78 +1087,73 @@ sub _ReturnResponse
 {
     my $self = shift;
     my $client = shift;
-    my $reqheaders = shift;
-    my $code = shift;
-    my $headers = shift;
-    my $response = shift;
+    my $requestObj = shift;
+    my $responseObj = shift;
 
     #-------------------------------------------------------------------------
-    # Initialize the content type
+    # If this is not a redirect...
     #-------------------------------------------------------------------------
-    $headers->{'Content-Type'} = "text/html"
-        unless exists($headers->{'Content-Type'});
-    
-    #-------------------------------------------------------------------------
-    # Check that it's acceptable to the client
-    #-------------------------------------------------------------------------
-    if (exists($reqheaders->{'Accept'}))
+    if (!$responseObj->Header("Location"))
     {
-        if (!$self->_accept($reqheaders->{accept},$headers->{'Content-Type'}))
+        #---------------------------------------------------------------------
+        # Initialize the content type
+        #---------------------------------------------------------------------
+        $responseObj->Header("Content-Type","text/html")
+            unless $responseObj->Header("Content-Type");
+    
+        #---------------------------------------------------------------------
+        # Check that it's acceptable to the client
+        #---------------------------------------------------------------------
+        if ($requestObj->Header("Accept"))
         {
-            ($code,$headers,$response) = @{$self->_NotAcceptable()};
+            $responseObj = $self->_NotAcceptable()
+                unless $self->_accept($requestObj->Header("Accept"),
+                                      $responseObj->Header("Content-Type")
+                                     );
         }
+
+        #---------------------------------------------------------------------
+        # Initialize any missing (and required) headers
+        #---------------------------------------------------------------------
+        $responseObj->Header("Accept-Ranges","none");
+        $responseObj->Header("Allow",join(", ",keys(%ALLOWED)));
+        $responseObj->Header("Content-Length",length($responseObj->Body()))
+            unless $responseObj->Header("Content-Length");
+        $responseObj->Header("Connection","close");
+        $responseObj->Header("Date",&_date());
+        $responseObj->Header("Server",join(" ",@{$self->{SERVER_TOKENS}}));
     }
 
-    #-------------------------------------------------------------------------
-    # Initialize any missing (and required) headers
-    #-------------------------------------------------------------------------
-    $headers->{'Accept-Ranges'} = "none";
-    $headers->{'Allow'} = join(", ",keys(%ALLOWED));
-    $headers->{'Content-Length'} = length($response)
-        unless exists($headers->{'Content-Length'});
-    $headers->{'Connection'} = "close";
-    $headers->{'Date'} = $self->_date();
-    $headers->{'Server'} = join(" ",@{$self->{SERVER_TOKENS}});
-    
     #-------------------------------------------------------------------------
     # If this was a HEAD, then there is no response
     #-------------------------------------------------------------------------
-    $response = "" if ($reqheaders->{'__METHOD__'} eq "HEAD");
+    $responseObj->Clear() if ($requestObj->Method() eq "HEAD");
     
-    if ($reqheaders->{'__METHOD__'} eq "TRACE")
+    if ($requestObj->Method() eq "TRACE")
     {
-        $headers->{'Content-Type'} = "message/http";
-        $response = $reqheaders->{'__TRACE__'};
+        $responseObj->Header("Content-Type","message/http");
+        $responseObj->Body($requestObj->Request());
     }
 
-    #-------------------------------------------------------------------------
-    # Format the return headers
-    #-------------------------------------------------------------------------
-    my $header = "HTTP/1.1 $code\n";
-    foreach my $key (keys(%{$headers}))
-    {
-        $header .= "$key: ".$headers->{$key}."\n";
-    }
-    chomp($header);
-    $header .= "\r\n\r\n";
+    my ($header,$body) = $responseObj->_build();
 
     #-------------------------------------------------------------------------
     # Debug
     #-------------------------------------------------------------------------
     $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
     $self->_debug("RESP","_ReturnResponse: $header");
-    if (($headers->{'Content-Type'} eq "text/html") ||
-        ($headers->{'Content-Type'} eq "text/plain"))
+    if (($responseObj->Header("Content-Type") eq "text/html") ||
+        ($responseObj->Header("Content-Type") eq "text/plain"))
     {
-        $self->_debug("RESP","_ReturnResponse: $response");
+        $self->_debug("RESP","_ReturnResponse: $body");
     }
     $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
-    
+
     #-------------------------------------------------------------------------
     # Send the headers and response
     #-------------------------------------------------------------------------
     return unless defined($self->_send($client,$header));
-    return unless defined($self->_send($client,$response));
+    return unless defined($self->_send($client,$body));
 }
 
 
@@ -1150,25 +1203,27 @@ sub _ServeFile
         return $self->_NotFound();
     }
 
-    my %headers;
-
     my $fileHandle = new FileHandle($fullpath);
     return $self->_NotFound() unless defined($fileHandle);
+
+    my $response = new Net::HTTPServer::Response();
 
     my ($ext) = ($fullpath =~ /\.([^\.]+?)$/);
     if (($ext ne "") && exists($self->{MIMETYPES}->{$ext}))
     {
-        $headers{'Content-Type'} = $self->{MIMETYPES}->{$ext};
+        $response->Header("Content-Type",$self->{MIMETYPES}->{$ext});
     }
     elsif (-T $fullpath)
     {
-        $headers{'Content-Type'} = $self->{MIMETYPES}->{txt};
+        $response->Header("Content-Type",$self->{MIMETYPES}->{txt});
     }
 
-    $headers{'Content-Length'} = (stat( $fullpath ))[7];
-    $headers{'Last-Modified'} = $self->_date((stat( $fullpath ))[9]);
+    $response->Header("Content-Length",(stat( $fullpath ))[7]);
+    $response->Header("Last-Modified",&_date((stat( $fullpath ))[9]));
 
-    return ["200",\%headers,$fileHandle];
+    $response->Body($fileHandle);
+
+    return $response;
 }
 
 
@@ -1248,7 +1303,7 @@ sub _BadRequest
     return $self->_Error("400",
                          {},
                          "Bad Request",
-                         "You made a bad request.  Somthing you sent did not match up.",
+                         "You made a bad request.  Something you sent did not match up.",
                         );
 }
 
@@ -1283,7 +1338,7 @@ sub _DirList
 
     $res .= "</body></html>\n";
 
-    return ["200",{},$res];
+    return new Net::HTTPServer::Response(body=>$res);
 }
 
 
@@ -1310,7 +1365,10 @@ sub _Error
     $response .= "</body>";
     $response .= "</html>";
 
-    return [$code,$headers,$response];
+    return new Net::HTTPServer::Response(code=>$code,
+                                         headers=>$headers,
+                                         body=>$response,
+                                        );
 }
 
 
@@ -1428,7 +1486,9 @@ sub _Redirect
     my $self = shift;
     my $url = shift;
 
-    return ["307",{ Location=>$url },""];
+    return new Net::HTTPServer::Response(code=>"307",
+                                         headers=>{ Location=>$url },
+                                        );
 }
 
 
@@ -1636,7 +1696,7 @@ sub _forking_huntsman
 {
     my $self = shift;
 
-    $self->_debug("FORK","_forking_hunstman: Killing children");
+    $self->_debug("PROC","_forking_hunstman: Killing children");
     $self->_log("Killing children");
     
     $SIG{CHLD} = 'IGNORE';
@@ -1745,9 +1805,9 @@ sub _process
     #------------------------------------------------------------------
     if (defined($request))
     {
-        my ($path,$reqheaders,$env) = $self->_ReadRequest($request);
-        my ($code,$headers,$response) = $self->_ProcessRequest($path,$reqheaders,$env);
-        $self->_ReturnResponse($client,$reqheaders,$code,$headers,$response);
+        my $requestObj = $self->_ReadRequest($request);
+        my $responseObj = $self->_ProcessRequest($requestObj);
+        $self->_ReturnResponse($client,$requestObj,$responseObj);
     }
     
     #------------------------------------------------------------------
@@ -1871,64 +1931,20 @@ sub _checkAuth
 
 ###############################################################################
 #
-# _chroot - take the path and if we are running under chroot, massage it so
-#           that is cannot leave DOCROOT.
-#
-###############################################################################
-sub _chroot
-{
-    my $self = shift;
-    my $url = shift;
-
-    $self->_debug("PROC","_chroot: in($url)");
-    
-    my $change = 1;
-    while( $change )
-    {
-        $change = 0;
-        
-        #-----------------------------------------------------------------
-        # Look for multiple / in a row and make them one /
-        #-----------------------------------------------------------------
-        while( $url =~ s/\/\/+/\// ) { $change = 1; }
-    
-        #-----------------------------------------------------------------
-        # look for something/.. and remove it
-        #-----------------------------------------------------------------
-        while( $url =~ s/[^\/]+\/\.\.(\/|$)// ) { $change = 1; }
-
-        #-----------------------------------------------------------------
-        # Look for ^/.. and remove it
-        #-----------------------------------------------------------------
-        while( $url =~ s/^\/?\.\.(\/|$)/\// ) { $change = 1; }
-        
-        #-----------------------------------------------------------------
-        # Look for /.../ and make it /
-        #-----------------------------------------------------------------
-        while( $url =~ s/(^|\/)\.+(\/|$)/\// ) { $change = 1; }
-    }
-
-    $self->_debug("PROC","_chroot: out($url)");
-
-    return $url;
-}
-
-
-###############################################################################
-#
 # _date - format the date correctly for the given time.
 #
 ###############################################################################
 sub _date
 {
-    my $self = shift;
     my $time = shift;
+    my $delta = shift;
 
     $time = time unless defined($time);
+    $time += $delta if defined($delta);
 
     my @times = gmtime($time);
     
-    my $date = sprintf("%s, %02d %s %d %02d:%02d:%02d GMT",
+    my $date = sprintf("%s, %02d-%s-%d %02d:%02d:%02d GMT",
                        (qw(Sun Mon Tue Wed Thu Fri Sat))[$times[6]],
                        $times[3],
                        (qw(Jan Feb Mar Apr May Jun Jul Aug Oct Nov Dec))[$times[4]],
@@ -1953,9 +1969,10 @@ sub _debug
     my $zone = shift;
     my (@message) = @_;
     
-    print "$zone: ",join("",@message),"\n"
-        if (exists($self->{DEBUG}->{$zone}) ||
-            exists($self->{DEBUG}->{ALL}));
+    my $fh = $self->{DEBUGLOG};
+    print $fh "$zone: ",join("",@message),"\n"
+        if (exists($self->{DEBUGZONES}->{$zone}) ||
+            exists($self->{DEBUGZONES}->{ALL}));
 }
 
 

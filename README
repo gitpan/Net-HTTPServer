@@ -33,11 +33,19 @@ INSTALLATION
 
 STATUS
 
-  So far, no major performance or stability bugs.  I built this for a couple
-of side projects I wanted to tackle, and wanted to make it available to
-everyone.  Please give me feedback.  I would love to make this more and more
-feature rich, while still keeping it light weight.
+  This update contains a new OOP style interface for requests and replies.
+I also added support for PHP style server side sessions.
+
+  The result of moving to the OOP interface is that the calling and return
+structure for handlers has changed.  For those that want to upgrade to this
+version of the module but do not want to have to rewrite your handlers
+immediately there is a config option for the server.  'oldrequests'=>1 will
+put the entire server back into the pre-1.0 style of handlers.  Giving you
+a chance to install the module and play with it before undertaking the
+conversion.
+
+  Aplogies for the change.
 
 DATE
-  2004/03/27
+  2004/07/03
 
