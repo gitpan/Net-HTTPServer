@@ -11,3 +11,4 @@ t/1_load.t
 t/lib/Test/Builder.pm
 t/lib/Test/More.pm
 t/lib/Test/Simple.pm
+META.yml                                 Module meta-data (added by MakeMaker)

@@ -1,4 +1,11 @@
-o.5
+0.6
+===
+  - Added code to detect a failed Start() and throw errors if Process()
+    was called.
+  - Fixed problem where a failed Start() would cause Stop() to crater
+    since the socket and selects might be undefined.
+
+0.5
 ===
   - Fixed bug with SSL support.  I had hard coded paths and a bad check
     for the SSL options.

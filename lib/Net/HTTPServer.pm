@@ -203,7 +203,7 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.5";
+$VERSION = "0.6";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -407,8 +407,15 @@ sub Stop
         $self->_forking_huntsman();
     }
     
-    $self->{SELECT}->remove($self->{SOCK});
-    $self->{SOCK}->close();
+    if (exists($self->{SELECT}) && defined($self->{SELECT}))
+    {
+        $self->{SELECT}->remove($self->{SOCK});
+    }
+
+    if (exists($self->{SOCK}) && defined($self->{SOCK}))
+    {
+        $self->{SOCK}->close();
+    }
 }
 
 
@@ -422,6 +429,12 @@ sub Process
 {
     my $self = shift;
     my $timeout = shift;
+
+    print "sock($self->{SOCK})\n";
+    if (!defined($self->{SOCK}))
+    {
+        croak("Process() called on undefined socket.  Check the result from Start().\n    ");
+    }
 
     my $timestop = undef;
     $timestop = time + $timeout if defined($timeout);
