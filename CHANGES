@@ -1,3 +1,9 @@
+0.4
+===
+  - Allow for the reponse to be a FileHandle that _send will read and send
+    in one go.  This should make serving files faster (at least big files).
+  - Fixed typo and mistake in logic with IO::Socket::SSL check.
+  
 0.3
 ===
   - Fixed logic to check for IO::Socket::SSL (didn't work very well with

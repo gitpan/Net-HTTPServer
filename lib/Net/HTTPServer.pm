@@ -203,19 +203,23 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.3";
+$VERSION = "0.4";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
 #------------------------------------------------------------------------------
-if (eval "require use IO::Socket::SSL")
+if (eval "require IO::Socket::SSL;")
 {
+    require IO::Socket::SSL;
+    import IO::Socket::SSL;
     $SSL = 1;
 }
 else
 {
     $SSL = 0;
 }
+
+print "ssl($SSL)\n";
 
 
 sub new
@@ -439,7 +443,6 @@ sub Process
         }
 
         $block = 0 if (defined($timestop) && (($timestop - time) <= 0));
-        $self->_debug("PROC","Do we block? $block");
     }
 }
 
@@ -532,11 +535,9 @@ sub _ServeFile
 
     my %headers;
 
-    open(FILE,$fullpath) || return $self->_NotFound();
-    binmode(FILE) if (-B $fullpath);
-    my @file = <FILE>;
-    close(FILE);
-    
+    my $fileHandle = new FileHandle($fullpath);
+    return $self->_NotFound() unless defined($fileHandle);
+
     my ($ext) = ($fullpath =~ /\.([^\.]+?)$/);
     if (($ext ne "") && exists($self->{MIMETYPES}->{$ext}))
     {
@@ -547,7 +548,7 @@ sub _ServeFile
         $headers{'Content-Type'} = $self->{MIMETYPES}->{txt};
     }
     
-    return ["200",\%headers,join("",@file)];
+    return ["200",\%headers,$fileHandle];
 }
 
 
@@ -831,13 +832,30 @@ sub _send
     my $sock = shift;
     my $data = shift;
 
-    my $length = length($data);
-    my $offset = 0;
-    while ($length != 0)
+    if (ref($data) eq "")
     {
-        my $written = $sock->syswrite($data,$length,$offset);
-        $length -= $written;
-        $offset += $written;
+        my $length = length($data);
+        my $offset = 0;
+        while ($length != 0)
+        {
+            my $written = $sock->syswrite($data,$length,$offset);
+            $length -= $written;
+            $offset += $written;
+        }
+    }
+    if (ref($data) eq "FileHandle")
+    {
+        while(my $temp = <$data>)
+        {
+            my $length = length($temp);
+            my $offset = 0;
+            while ($length != 0)
+            {
+                my $written = $sock->syswrite($temp,$length,$offset);
+                $length -= $written;
+                $offset += $written;
+            }
+        }
     }
 }
 
@@ -883,6 +901,11 @@ sub _process
 }
 
 
+###############################################################################
+#
+# _forking_huntsman - Kill all of the child processes
+#
+###############################################################################
 sub _forking_huntsman
 {
     my $self = shift;
@@ -899,6 +922,11 @@ sub _forking_huntsman
 }
 
 
+###############################################################################
+#
+# _forking_process - This is a forking model.
+#
+###############################################################################
 sub _forking_process
 {
     my $self = shift;
@@ -912,6 +940,11 @@ sub _forking_process
 }
 
 
+###############################################################################
+#
+# _forking_reaper - When a child dies, have a funeral, mourn, and then move on
+#
+###############################################################################
 sub _forking_reaper
 {
     my $self = shift;
@@ -923,6 +956,11 @@ sub _forking_reaper
 }
 
 
+###############################################################################
+#
+# _forking_spawn - Give birth to a new child process
+#
+###############################################################################
 sub _forking_spawn
 {
     my $self = shift;
@@ -957,7 +995,7 @@ sub _forking_spawn
 
 ###############################################################################
 #
-# _single_process - This is a single thread model.
+# _single_process - This is a single process model.
 #
 ###############################################################################
 sub _single_process
