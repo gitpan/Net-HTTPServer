@@ -15,7 +15,7 @@
 #  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA  02111-1307, USA.
 #
-#  Copyright (C) 2003-2004 Ryan Eatmon
+#  Copyright (C) 2003-2005 Ryan Eatmon
 #
 ##############################################################################
 package Net::HTTPServer;
@@ -28,7 +28,7 @@ Net::HTTPServer
 
 Net::HTTPServer provides a lite HTTP server.  It can serve files, or can
 be configured to call Perl functions when a URL is accessed.
-  
+
 =head1 DESCRIPTION
 
 Net::HTTPServer basically turns a CGI script into a stand alone server.
@@ -37,25 +37,24 @@ server into another program.
 
 =head1 EXAMPLES
 
-use Net::HTTPServer;
+    use Net::HTTPServer;
 
-my $server = new Net::HTTPServer(port=>5000,
-                                 docroot=>"/var/www/site");
+    my $server = new Net::HTTPServer(port=>5000,
+                                     docroot=>"/var/www/site");
 
-$server->Start();
+    $server->Start();
 
-$server->Process();  # Run forever
+    $server->Process();  # Run forever
 
-   or
+    ...or...
 
-while(1)
-{
-    $server->Process(5);  # Run for 5 seconds
-    # Do something else...
-}
+    while(1)
+    {
+        $server->Process(5);  # Run for 5 seconds
+        # Do something else...
+    }
 
-$server->Stop();
-
+    $server->Stop();
 
 =head1 METHODS
 
@@ -76,8 +75,11 @@ and stop.  The config hash takes the options:
                           ( Deault: "/tmp/nethttpserver.sessions" )
 
     docroot => string   - Path on the filesystem that you want to be
-                          the document root "/" for the server.
-                          ( Default: "." )
+                          the document root "/" for the server.  If
+                          set to undef, then the server will not serve
+                          any files off the local filesystem, but will
+                          still serve callbacks.
+                          ( Default: undef )
 
     index => list       - Specify a list of file names to use as the
                           the index file when a directory is requested.
@@ -138,7 +140,7 @@ Adds one or more tokens onto the Server header line that the server sends
 back in a response.  The list is seperated by a ; to distinguish the
 various tokens from each other.
 
-  $server->AddServerTokens("test/1.3")l
+  $server->AddServerTokens("test/1.3");
 
 This would result in the following header being sent in a response:
 
@@ -251,6 +253,31 @@ Only complete directories are matched, so if you had a handler for
 C</foo/bar>, then it would not be called for either /foo/bar.pl or
 C</foo/bar.html>.
 
+=head2 RegisterRegex(regex,function)
+
+Register the function with the provided regular expression.  When a
+URL that matches that regular expression is requested, the function
+is called and passed the environment (GET+POST) so that it can do
+something meaningfiul with them.  For more information on how the
+function is called and should be used see the section on RegisterURL
+below.
+
+  $server->RegisterRegex(".*.news$",\&news);
+
+This will match any URL that ends in ".news" and call the &news
+function.  The URL that the user request can be retrieved via the
+Request object ($reg->Path()).
+
+=head2 RegisterRegex(hash ref)
+
+Instead of calling RegisterRegex a bunch of times, you can just pass
+it a hash ref containing Regex/callback pairs.
+
+  $server->RegisterRegex({
+                           ".*.news$" => \&news,
+                           ".*.foo$" => \&foo,
+                         });
+
 =head2 RegisterURL(url,function)
 
 Register the function with the provided URL.  When that URL is requested,
@@ -291,6 +318,18 @@ You should see a page titled "This is a test" with this body:
 
   test -> bing
   test2 -> bong
+  
+=head2 RegisterURL(hash ref)
+
+Instead of calling RegisterURL a bunch of times, you can just pass
+it a hash ref containing URL/callback pairs.
+
+  $server->RegisterURL({
+                         "/foo/bar.pl" => \&test1,
+                         "/foo/baz.pl" => \&test2,
+                       });
+
+See RegisterURL() above for more information on how callbacks work.
 
 =head2 Start()
 
@@ -373,7 +412,7 @@ Ryan Eatmon
 
 =head1 COPYRIGHT
 
-Copyright (c) 2003-2004 Ryan Eatmon <reatmon@mail.com>. All rights
+Copyright (c) 2003-2005 Ryan Eatmon <reatmon@mail.com>. All rights
 reserved.  This program is free software; you can redistribute it
 and/or modify it under the same terms as Perl itself.
 
@@ -392,10 +431,11 @@ use Net::HTTPServer::Request;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "1.0.2";
+$VERSION = "1.1";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
+$ALLOWED{OPTIONS} = 1;
 $ALLOWED{POST} = 1;
 $ALLOWED{TRACE} = 1;
 
@@ -454,9 +494,24 @@ sub new
 
     $self->{ARGS} = \%args;
 
+    #--------------------------------------------------------------------------
+    # Get the hostname...
+    #--------------------------------------------------------------------------
+    my $hostname = (uname)[1];
+    my $address  = gethostbyname($hostname);
+    if ($address)
+    {
+        $hostname = $address;
+        my $temp = gethostbyaddr($address, AF_INET);
+        $hostname = $temp if ($temp);
+    }
+
+    $self->{SERVER}->{NAME} = $hostname;
+
+    $self->{CFG}->{ADMIN}       = $self->_arg("admin",'webmaster@'.$hostname);
     $self->{CFG}->{CHROOT}      = $self->_arg("chroot",1);
     $self->{CFG}->{DATADIR}     = $self->_arg("datadir","/tmp/nethttpserver.sessions");
-    $self->{CFG}->{DOCROOT}     = $self->_arg("docroot",".");
+    $self->{CFG}->{DOCROOT}     = $self->_arg("docroot",undef);
     $self->{CFG}->{INDEX}       = $self->_arg("index",["index.html","index.htm"]);
     $self->{CFG}->{LOG}         = $self->_arg("log","access.log");
     $self->{CFG}->{MIMETYPES}   = $self->_arg("mimetypes",undef);
@@ -468,7 +523,7 @@ sub new
     $self->{CFG}->{SSL_KEY}     = $self->_arg("ssl_key",undef);
     $self->{CFG}->{SSL_CERT}    = $self->_arg("ssl_cert",undef);
     $self->{CFG}->{SSL_CA}      = $self->_arg("ssl_ca",undef);
-    $self->{CFG}->{TYPE}        = $self->_arg("type","single");
+    $self->{CFG}->{TYPE}        = $self->_arg("type","single",["single","forking"]);
 
     if ($self->{CFG}->{LOG} eq "STDOUT")
     {
@@ -551,6 +606,8 @@ sub new
             File::Path::mkpath($self->{CFG}->{DATADIR},0,0700);
         }
     }
+
+    $self->{REGEXID} = 0;
 
     #XXX Clean up the datadir of files older than a certain time.
 
@@ -667,6 +724,29 @@ sub RegisterAuth
 
 ###############################################################################
 #
+# RegisterRegex - given a regular expressions, call the supplied function when
+#                 it a request path matches it.
+#
+###############################################################################
+sub RegisterRegex
+{
+    my $self = shift;
+    my $regex = shift;
+    my $callback = shift;
+
+    $regex =~ s/\//\\\//g;
+
+    $self->{REGEXID}++;
+    my $id = "__nethttpserver__:regex:".$self->{REGEXID};
+    
+    $self->{REGEXCALLBACKS}->{$regex}->{callback} = $id;
+    $self->{REGEXCALLBACKS}->{$regex}->{id} = $self->{REGEXID};
+    $self->{CALLBACKS}->{$id} = $callback;
+}
+
+
+###############################################################################
+#
 # RegisterURL - given a URL path, call the supplied function when it is
 #               requested.
 #
@@ -675,9 +755,20 @@ sub RegisterURL
 {
     my $self = shift;
     my $url = shift;
-    my $callback = shift;
 
-    $self->{CALLBACKS}->{$url} = $callback;
+    if (ref($url) eq "HASH")
+    {
+        foreach my $hashURL (keys(%{$url}))
+        {
+            $self->{CALLBACKS}->{$hashURL} = $url->{$hashURL};
+        }
+    }
+    else
+    {
+        my $callback = shift;
+
+        $self->{CALLBACKS}->{$url} = $callback;
+    }
 }
 
 
@@ -771,6 +862,8 @@ sub Start
     }
     
     $self->_log("Server running on port $port");
+
+    $self->{SERVER}->{PORT} = $port;
 
     return $port;
 }
@@ -888,7 +981,8 @@ sub _HandleAuthBasic
     #-------------------------------------------------------------------------
     # We authed, so set REMOTE_USER in the env hash and return
     #-------------------------------------------------------------------------
-    $requestObj->Env("REMOTE_USER",$user);
+    $requestObj->_env("AUTH_TYPE","Basic");
+    $requestObj->_env("REMOTE_USER",$user);
     return;
 }
 
@@ -979,7 +1073,8 @@ sub _HandleAuthDigest
     #-------------------------------------------------------------------------
     # We authed, so set REMOTE_USER in the env hash and return
     #-------------------------------------------------------------------------
-    $requestObj->Env("REMOTE_USER",$authorization{username});
+    $requestObj->_env("AUTH_TYPE","Digest");
+    $requestObj->_env("REMOTE_USER",$authorization{username});
     return;
 }
 
@@ -998,18 +1093,21 @@ sub _ProcessRequest
     #-------------------------------------------------------------------------
     # Catch some common errors/reponses without doing any real hard work
     #-------------------------------------------------------------------------
-    return @{$self->_ExpectationFailed()}
+    return $self->_ExpectationFailed()
         if ($requestObj->_failure() eq "expect");
     
-    return @{$self->_MethodNotAllowed()}
+    return $self->_MethodNotAllowed()
         unless exists($ALLOWED{$requestObj->Method()});
     
-    return @{$self->_BadRequest()}
+    return $self->_BadRequest()
         unless $requestObj->Header("Host");
     
-    return @{$self->_LengthRequired()}
+    return $self->_LengthRequired()
         if ($requestObj->Header("Transfer-Encoding") &&
             $requestObj->Header("Transfer-Encoding") ne "identity");
+
+    return $self->_Options()
+        if ($requestObj->Method() eq "OPTIONS");
 
     return new Net::HTTPServer::Response()
         if ($requestObj->Method() eq "TRACE");
@@ -1018,11 +1116,32 @@ sub _ProcessRequest
 
     my $reqPath = $requestObj->Path();
     my $method = "not found";
+
+    my $reqPath1 = $reqPath."/";
+    my ($reqPath2) = ($reqPath =~ /^(.+)\/$/);
+    $reqPath2 = $reqPath if !defined($reqPath);
+
     if (exists($self->{CALLBACKS}->{$reqPath}))
     {
         $method = "callback";
     }
-    elsif (-e $self->{CFG}->{DOCROOT}."/".$reqPath)
+    elsif (exists($self->{CALLBACKS}->{$reqPath1}))
+    {
+        $method = "callback";
+        $reqPath = $reqPath1;
+    }
+    elsif (exists($self->{CALLBACKS}->{$reqPath2}))
+    {
+        $method = "callback";
+        $reqPath = $reqPath2;
+    }
+    elsif (my $regex = $self->_RegexMatch($reqPath))
+    {
+        $reqPath = $regex;
+        $method = "callback";
+    }
+    elsif (defined($self->{CFG}->{DOCROOT}) &&
+           (-e $self->{CFG}->{DOCROOT}."/".$reqPath))
     {
         $method = "file";
 
@@ -1031,8 +1150,10 @@ sub _ProcessRequest
             $self->_debug("PROC","_ProcessRequest: This is a directory, look for an index file.");
             foreach my $index (@{$self->{CFG}->{INDEX}})
             {
-                my $testPath = $reqPath.$index;
-            
+                my $testPath = $reqPath;
+                $testPath .= "/" unless ($reqPath =~ /\/$/);
+                $testPath .= $index;
+
                 $self->_debug("PROC","_ProcessRequest:   index? ($testPath)");
 
                 if (exists($self->{CALLBACKS}->{$testPath}))
@@ -1052,12 +1173,15 @@ sub _ProcessRequest
             }
         }
     }
-    elsif ($reqPath =~ /\/$/)
+    else
     {
-        $self->_debug("PROC","_ProcessRequest: Looks like a directory... index callback?");
+        $self->_debug("PROC","_ProcessRequest: Might be a virtual directory... index callback?");
+
         foreach my $index (@{$self->{CFG}->{INDEX}})
         {
-            my $testPath = $reqPath.$index;
+            my $testPath = $reqPath;
+            $testPath .= "/" unless ($reqPath =~ /\/$/);
+            $testPath .= $index;
             
             $self->_debug("PROC","_ProcessRequest:   index? ($testPath)");
             
@@ -1131,6 +1255,28 @@ sub _ReadRequest
     $self->_log($requestObj->Method()." ".$requestObj->URL());
 
     return $requestObj;
+}
+
+
+###############################################################################
+#
+# _RegexMatch - loop through all of the regex callbacks and see if any match
+#               the request path.
+#
+###############################################################################
+sub _RegexMatch
+{
+    my $self = shift;
+    my $reqPath = shift;
+
+    return unless exists($self->{REGEXCALLBACKS});
+
+    foreach my $regex (sort {$self->{REGEXCALLBACKS}->{$a}->{id} <=> $self->{REGEXCALLBACKS}->{$b}->{id}} keys(%{$self->{REGEXCALLBACKS}}))
+    {
+        return $self->{REGEXCALLBACKS}->{$regex}->{callback} if ($reqPath =~ /$regex/);
+    }
+
+    return;
 }
 
 
@@ -1523,6 +1669,22 @@ sub _NotFound
 
 ###############################################################################
 #
+# _Options - returns a response to an OPTIONS request
+#
+###############################################################################
+sub _Options
+{
+    my $self = shift;
+
+    return new Net::HTTPServer::Response(code=>200,
+                                         headers=>{},
+                                         body=>"",
+                                        );
+}
+
+
+###############################################################################
+#
 # _Redirect - Excuse me.  You need to be going somewhere else...
 #
 ###############################################################################
@@ -1782,8 +1944,11 @@ sub _forking_reaper
 
     $SIG{CHLD} = sub{ $self->_forking_reaper(); };
     my $pid = wait;
-    $self->{NUMCHILDREN}--;
-    delete($self->{CHILDREN}->{$pid});
+    if (exists($self->{CHILDREN}->{$pid}))
+    {
+        $self->{NUMCHILDREN}--;
+        delete($self->{CHILDREN}->{$pid});
+    }
 }
 
 
@@ -1845,13 +2010,55 @@ sub _process
             
     my $request = $self->_read($client);
             
-    #------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     # Take the request and do the magic
-    #------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     if (defined($request))
     {
+        #----------------------------------------------------------------------
+        # Create the Request Object
+        #----------------------------------------------------------------------
         my $requestObj = $self->_ReadRequest($request);
+        
+        #----------------------------------------------------------------------
+        # Profile the client
+        #----------------------------------------------------------------------
+        my $other_end = $client->peername();
+
+        if ($other_end)
+        {
+            my ($port, $iaddr) = unpack_sockaddr_in($other_end);
+            my $ip_addr = inet_ntoa($iaddr);
+            $requestObj->_env("REMOTE_ADDR",$ip_addr);
+            
+            my $hostname = gethostbyaddr($iaddr, AF_INET);
+            $requestObj->_env("REMOTE_NAME",$hostname) if ($hostname);
+        }
+
+        $requestObj->_env("DOCUMENT_ROOT",$self->{CFG}->{DOCROOT})
+            if defined($self->{CFG}->{DOCROOT});
+        $requestObj->_env("GATEWAY_INTERFACE","CGI/1.1");
+        $requestObj->_env("HTTP_REFERER",$requestObj->Header("Referer"))
+            if defined($requestObj->Header("Referer"));
+        $requestObj->_env("HTTP_USER_AGENT",$requestObj->Header("User-Agent"))
+            if defined($requestObj->Header("User-Agent"));
+        $requestObj->_env("QUERY_STRING",$requestObj->Query());
+        $requestObj->_env("REQUEST_METHOD",$requestObj->Method());
+        $requestObj->_env("SCRIPT_NAME",$requestObj->Path());
+        $requestObj->_env("SERVER_ADMIN",$self->{CFG}->{ADMIN});
+        $requestObj->_env("SERVER_NAME",$self->{SERVER}->{NAME});
+        $requestObj->_env("SERVER_PORT",$self->{SERVER}->{PORT});
+        $requestObj->_env("SERVER_PROTOCOL",$requestObj->Protocol());
+        $requestObj->_env("SERVER_SOFTWARE",join(" ",@{$self->{SERVER_TOKENS}}));
+        
+        #----------------------------------------------------------------------
+        # Process the Request
+        #----------------------------------------------------------------------
         my $responseObj = $self->_ProcessRequest($requestObj);
+        
+        #----------------------------------------------------------------------
+        # Return the Response
+        #----------------------------------------------------------------------
         $self->_ReturnResponse($client,$requestObj,$responseObj);
     }
     
@@ -1943,8 +2150,25 @@ sub _arg
     my $self = shift;
     my $arg = shift;
     my $default = shift;
+    my $valid = shift;
 
-    return (exists($self->{ARGS}->{$arg}) ? $self->{ARGS}->{$arg} : $default);
+    my $val = (exists($self->{ARGS}->{$arg}) ? $self->{ARGS}->{$arg} : $default);
+
+    if (defined($valid))
+    {
+        my $pass = 0;
+        foreach my $check (@{$valid})
+        {
+            $pass = 1 if ($check eq $val);
+        }
+        if ($pass == 0)
+        {
+            croak("Invalid value for setting '$arg' = '$val'.  Valid are: ['".join("','",@{$valid})."']");
+        }
+    }
+    
+
+    return $val;
 }
 
 
@@ -1992,7 +2216,7 @@ sub _date
     my $date = sprintf("%s, %02d-%s-%d %02d:%02d:%02d GMT",
                        (qw(Sun Mon Tue Wed Thu Fri Sat))[$times[6]],
                        $times[3],
-                       (qw(Jan Feb Mar Apr May Jun Jul Aug Oct Nov Dec))[$times[4]],
+                       (qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec))[$times[4]],
                        $times[5]+1900,
                        $times[2],
                        $times[1],
@@ -2163,12 +2387,12 @@ sub _nonblock
     # Code copied from POE::Wheel::SocketFactory...
     # Win32 does things one way...
     #--------------------------------------------------------------------------
-    if ($^O eq "MSWin32")
+    if (($^O eq "MSWin32") || ($^O eq "cygwin"))
     {
         my $FIONBIO = 0x8004667E;
         my $temp = 1;
         ioctl( $socket, $FIONBIO, \$temp) ||
-            croak("Can't make socket nonblocking (win32): $!");
+            croak("Can't make socket nonblocking (".$^O."): $!");
         return;
     }
 
@@ -2206,8 +2430,7 @@ sub _timestamp
 
     my ($sec,$min,$hour,$mday,$mon,$year,$wday) = localtime(time);
 
-    my $month = ('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','No
-v','Dec')[$mon];
+    my $month = ('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')[$mon];
     $mon++;
 
     return sprintf("%d/%02d/%02d %02d:%02d:%02d",($year + 1900),$mon,$mday,$hour,$min,$sec);

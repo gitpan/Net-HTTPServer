@@ -15,7 +15,7 @@
 #  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA  02111-1307, USA.
 #
-#  Copyright (C) 2003-2004 Ryan Eatmon
+#  Copyright (C) 2003-2005 Ryan Eatmon
 #
 ##############################################################################
 package Net::HTTPServer::Session;
@@ -113,7 +113,7 @@ Ryan Eatmon
 
 =head1 COPYRIGHT
 
-Copyright (c) 2003-2004 Ryan Eatmon <reatmon@mail.com>. All rights
+Copyright (c) 2003-2005 Ryan Eatmon <reatmon@mail.com>. All rights
 reserved.  This program is free software; you can redistribute it
 and/or modify it under the same terms as Perl itself.
 
@@ -125,7 +125,7 @@ use Data::Dumper;
 
 use vars qw ( $VERSION $SESSION_COUNT %data );
 
-$VERSION = "1.0.2";
+$VERSION = "1.0.3";
 
 $SESSION_COUNT = 0;
 

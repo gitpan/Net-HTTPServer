@@ -15,7 +15,7 @@
 #  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA  02111-1307, USA.
 #
-#  Copyright (C) 2003-2004 Ryan Eatmon
+#  Copyright (C) 2003-2005 Ryan Eatmon
 #
 ##############################################################################
 package Net::HTTPServer::Request;
@@ -60,13 +60,22 @@ Returns the method of the request (GET,POST,etc...)
 Returns the path portion of the URL.  Does not include any query
 strings.
 
+=head2 Procotol()
+
+Returns the name and revision that the request came in with.
+
+=head2 Query()
+
+Returns the query portion of the URL (if any).  You can combine the Path
+and the Query with a ? to get the real URL that the client requested.
+
 =head2 Request()
 
 Returns the entire request as a string.
 
 =head2 Response()
 
-Returns a Net::HTTPServer::Response obejct with various bits prefilled
+Returns a Net::HTTPServer::Response object with various bits prefilled
 in.  If you have created session via the Session() method, then the
 session will already be registered with the response.
 
@@ -86,7 +95,7 @@ Ryan Eatmon
 
 =head1 COPYRIGHT
 
-Copyright (c) 2003-2004 Ryan Eatmon <reatmon@mail.com>. All rights
+Copyright (c) 2003-2005 Ryan Eatmon <reatmon@mail.com>. All rights
 reserved.  This program is free software; you can redistribute it
 and/or modify it under the same terms as Perl itself.
 
@@ -100,7 +109,7 @@ use URI::Escape;
 
 use vars qw ( $VERSION );
 
-$VERSION = "1.0.2";
+$VERSION = "1.0.3";
 
 sub new
 {
@@ -174,6 +183,22 @@ sub Path
     my $self = shift;
 
     return $self->{PATH};
+}
+
+
+sub Protocol
+{
+    my $self = shift;
+
+    return $self->{PROTOCOL};
+}
+
+
+sub Query
+{
+    my $self = shift;
+
+    return $self->{QUERY};
 }
 
 
@@ -294,11 +319,21 @@ sub _failure
 }
 
 
+sub _env
+{
+    my $self = shift;
+    my $env = shift;
+    my $value = shift;
+
+    $self->{ENV}->{$env} = $value;
+}
+
+
 sub _parse
 {
     my $self = shift;
 
-    ($self->{METHOD},$self->{URL}) = ($self->{REQUEST} =~ /(\S+)\s+(\S+)\s+/s);
+    ($self->{METHOD},$self->{URL},$self->{PROTOCOL}) = ($self->{REQUEST} =~ /(\S+)\s+(\S+)\s+(.+?)\015?\012/s);
     
     my $uri = new URI($self->{URL},"http");
 
@@ -329,7 +364,7 @@ sub _parse
         $last_header = $key;
         
         $self->{HEADERS}->{lc($key)} = $value;
-        
+
         if ((lc($key) eq "expect") && ($value ne "100-continue"))
         {
             $self->{FAILURE} = "expect";
@@ -340,6 +375,7 @@ sub _parse
     #-------------------------------------------------------------------------
     # Did they send any ?xxx=yy on the URL?
     #-------------------------------------------------------------------------
+    $self->{QUERY} = $uri->query();
     foreach my $key ($uri->query_param())
     {
         $self->{ENV}->{$key} = $uri->query_param($key);

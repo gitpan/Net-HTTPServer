@@ -15,7 +15,7 @@
 #  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA  02111-1307, USA.
 #
-#  Copyright (C) 2003-2004 Ryan Eatmon
+#  Copyright (C) 2003-2005 Ryan Eatmon
 #
 ##############################################################################
 package Net::HTTPServer::Response;
@@ -127,13 +127,33 @@ created from the request object, and there was a session created
 from the request object then this, will be prepopulated with that
 session.
 
+=head2 CaptureSTDOUT()
+
+If you use the CGI perl module then it wants to print everything to
+STDOUT.  CaptureSTDOUT() will put the Reponse object into a mode
+where it will capture all the output from the module. See
+ProcessSTDOUT() for more information.
+
+=head2 ProcessSTDOUT([%args])
+
+This will harvest all of the data printed to STDOUT and put it into
+the Response object via a Print() call.  This will also stop
+monitoring STDOUT and release it.  You can specify some options:
+
+  strip_header => 0|1     - If you use the CGI module and you
+                            print the headers then ProcessSTDOUT()
+                            can try to strip those out.  The best
+                            plan is not to print them.
+                            
+See CaptureSTDOUT() for more information.
+
 =head1 AUTHOR
 
 Ryan Eatmon
 
 =head1 COPYRIGHT
 
-Copyright (c) 2003-2004 Ryan Eatmon <reatmon@mail.com>. All rights
+Copyright (c) 2003-2005 Ryan Eatmon <reatmon@mail.com>. All rights
 reserved.  This program is free software; you can redistribute it
 and/or modify it under the same terms as Perl itself.
 
@@ -142,10 +162,11 @@ and/or modify it under the same terms as Perl itself.
 use strict;
 use Carp;
 use URI::Escape;
+use Net::HTTPServer::CaptureSTDOUT;
 
 use vars qw ( $VERSION );
 
-$VERSION = "1.0.2";
+$VERSION = "1.0.3";
 
 sub new
 {
@@ -263,6 +284,39 @@ sub Session
     return $self->{SESSION};
 }
 
+
+sub CaptureSTDOUT
+{
+    my $self = shift; 
+
+    if (tied *STDOUT)
+    {
+		croak("You cannot call CaptureSTDOUT more than once without calling ProcessSTDOUT");
+	}
+
+    tie(*STDOUT, "Net::HTTPServer::CaptureSTDOUT");
+}
+
+
+sub ProcessSTDOUT
+{
+    my $self = shift; 
+    my (%args) = @_;
+
+    my $output = join("",<STDOUT>);
+
+    #--------------------------------------------------------------------------
+    # Try and strip out the headers if the user printed any...
+    #--------------------------------------------------------------------------
+    if (exists($args{strip_header}) && ($args{strip_header} == 1))
+    {
+        $output =~ s/^.+\015?\012\015?\012//;
+    }
+
+    $self->Print($output);
+
+    untie(*STDOUT);
+}
 
 ###############################################################################
 #

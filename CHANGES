@@ -1,3 +1,15 @@
+1.1
+===
+
+  - Added most of the CGI environment variables into the Env hash.
+  - docroot now defaults to undef which turns off file serving.
+  - Added support for CGI via CaptureSTDOUT() and ProcessSTDOUT().
+  - Fixed bugs with / on directories.
+  - Added support for RegisterRegex.
+  - Fixed bug with _date and missing Sep(tember) entry in the date.
+  - Fixed bug with some error conditions.
+  - Added support for OPTIONS.
+
 1.0.2
 =====
 
