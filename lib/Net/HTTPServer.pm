@@ -314,7 +314,7 @@ use POSIX;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.9.1";
+$VERSION = "0.9.2";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -593,7 +593,8 @@ sub Start
                                                  Proto=>"tcp",
                                                  Listen=>10,
                                                  Reuse=>1,
-                                                 Blocking=>0);
+                                                 Blocking=>0,
+                                                );
         }
         else
         {
@@ -938,11 +939,12 @@ sub _ReadRequest
 
     $headers{'__TRACE__'} = $request if ($method eq "TRACE");
     
-    my ($headers,$body) = ($request =~ /^(.+?)\r?\n\r?\n(.*?)$/s);
+    #my ($headers,$body) = ($request =~ /^(.+?)\r?\n\r?\n(.*?)$/s);
+    my ($headers,$body) = ($request =~ /^(.+?)\015?\012\015?\012(.*?)$/s);
     $self->_debug("REQ","_ReadRequest: headers($headers)");
     $self->_debug("REQ","_ReadRequest: body($body)");
 
-    foreach my $header (split("\n",$headers))
+    foreach my $header (split(/[\r\n]+/,$headers))
     {
         my ($key,$value) = ($header =~ /^([^\:]+)\s*\:\s*(.+)\s*$/);
         next unless defined($key);
@@ -1731,7 +1733,8 @@ sub _accept
 
     $accept =~ s/\s*\,\s*/\,/g;
     $accept =~ s/\s*\;\s*/\;/g;
-    
+    $accept =~ s/\s*$//;
+
     my ($mainType,$subType) = split("/",$contentType,2);
 
     foreach my $entry (split(",",$accept))
@@ -1798,11 +1801,35 @@ sub _chroot
     my $self = shift;
     my $url = shift;
 
-    return $url if $self->{CFG}->{NOCHROOT};
+    $self->_debug("PROC","_chroot: in($url)");
+    
+    my $change = 1;
+    while( $change )
+    {
+        $change = 0;
+        
+        #-----------------------------------------------------------------
+        # Look for multiple / in a row and make them one /
+        #-----------------------------------------------------------------
+        while( $url =~ s/\/\/+/\// ) { $change = 1; }
+    
+        #-----------------------------------------------------------------
+        # look for something/.. and remove it
+        #-----------------------------------------------------------------
+        while( $url =~ s/[^\/]+\/\.\.(\/|$)// ) { $change = 1; }
 
-    while( $url =~ s/[^\/]+\/\.\.// ) { }
-    while( $url =~ s/^\/?\.\.// ) { }
-    while( $url =~ s/^\/\/+/\// ) { }
+        #-----------------------------------------------------------------
+        # Look for ^/.. and remove it
+        #-----------------------------------------------------------------
+        while( $url =~ s/^\/?\.\.(\/|$)/\// ) { $change = 1; }
+        
+        #-----------------------------------------------------------------
+        # Look for /.../ and make it /
+        #-----------------------------------------------------------------
+        while( $url =~ s/(^|\/)\.+(\/|$)/\// ) { $change = 1; }
+    }
+
+    $self->_debug("PROC","_chroot: out($url)");
 
     return $url;
 }
