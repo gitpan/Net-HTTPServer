@@ -22,6 +22,8 @@ REQUIREMENTS
 
 OPTIONAL
   - IO::Socket::SSL  - Allows for a secure web server
+  - MIME::Base64     - Allows for Basic Authentication
+  - Digest::MD5      - Allows for Digest Autentication
 
 INSTALLATION
 
@@ -37,5 +39,5 @@ everyone.  Please give me feedback.  I would love to make this more and more
 feature rich, while still keeping it light weight.
 
 DATE
-  2003/07/03
+  2004/03/27
 

@@ -119,23 +119,125 @@ and stop.  The config hash takes the options:
                           (Default: "single")
 
 
-=head2 Start()
+=head2 AddServerTokens(token,[token,...])
 
-Starts the server based on the config options passed to new().  Returns
-the port number the server is listening on, or undef if the server was
-unable to start.
+Adds one or more tokens onto the Server header line that the server sends
+back in a response.  The list is seperated by a ; to distinguish the
+various tokens from each other.
 
-=head2 Stop()
+  $server->AddServerTokens("test/1.3")l
 
-Shuts down the socket connection and cleans up after itself.
-  
+This would result in the following header being sent in a response:
+
+HTTP/1.1 200
+Server: Net::HTTPServer/0.9 test/1.3
+Content-Type: text/html
+...
+
 =head2 Process(timeout)
 
 Listens for incoming requests and responds back to them.  This function
 will block, unless a timeout is specified, then it will block for that
 number of seconds before returning.  Useful for embedding this into
 other programs and still letting the other program get some CPU time.
-  
+
+=head2 RegisterAuth(method,url,realm,function)
+
+Protect the URL using the Authentication method provided.  The supported
+methods are: "Basic" and "Digest".
+
+When a URL with a path component that matchs the specified URL is
+requested the server requests that the client perform the specified
+of authentication for the given realm.  When the URL is accessed the
+second time, the client provides the authentication pieces and the
+server parses the pieces and using the return value from the specified
+function answers the request.  The function is called with the username
+and the URL they are trying to access.  It is required that the function
+return a two item list with a return code and the users's password.
+
+The valid return codes are:
+
+  200   The user exists and is allowed to access
+        this URL.  Return the password.
+        return( "200", password )
+
+  401   The user does not exist.  Obviously you
+        do not have to return a password in this
+        case.
+        return( "401" )
+
+  403   The user is forbidden to access this URL.
+        (You must still return the password because
+        if the user did not auth, then we do not want
+        to tip off the bad people that this username
+        is valid.)
+        return( "403", password )
+
+The reasoning for having the function return the password is that Digest
+authentication is just complicated enough that asking you to write part of
+logic would be considered rude.  By just having you give the server the
+password we can keep the whole Auth interface simple.
+
+Here is an example:
+
+  $server->RegisterAuth("Basic","/foo/bar.pl","Secure",\&testBasic);
+
+  sub testBasic
+  {
+      my $url = shift;
+      my $user = shift;
+
+      my $password = &lookupPassword($user);
+      
+      return("401","") unless defined($password);
+      
+      if (($url eq "/foo/bar.pl") && ($user eq "dr_evil"))
+      {
+          return ("403",$password);
+      }
+
+      return ("200",$password);
+  }
+
+  sub lookupPassword
+  {
+      my $user = shift;
+
+      my %passwd;
+      $passwd{larry}   = "wall";
+      $passwd{dr_evil} = "1million";
+
+      return unless exists($passwd{$user});
+      return $passwd{$user};
+  }
+
+Start a server with that, and the following RegisterURL example,
+and point your browser to:
+
+  http://localhost:9000/foo/bar.pl?test=bing&test2=bong
+
+You should be prompted for a userid and password, entering "larry"
+and "wall"  will allow you to see the page.  Entering "dr_evil" and
+"1million" should result in getting a Forbidden page (and likely
+needing to restart your browser).  Entering any other userid or
+password should result in you being asked again.
+
+If you have a handler for both RegisterURL and RegisterAuth, then
+your function for RegisterURL can find the identify of the user in
+the C<$env-E<gt>{'REMOTE_USER'}> hash entry. This is similar to CGI
+scripts.
+
+You can have multiple handlers for different URLs. If you do this,
+then the longest complete URL handler will be called. For example,
+if you have handlers for C</foo/bar.pl> and C</foo>, and a URL
+of C</foo/bar.pl> is called, then the handler C</foo/bar.pl> is
+called to authorize this request, but if a URL of C</foo/bar.html>
+is called, then the handler C</foo> is called.
+
+Only complete directories are matched, so if you had a handler for
+C</foo/bar>, then it would not be called for either /foo/bar.pl or
+C</foo/bar.html>.
+
 =head2 RegisterURL(url,function)
 
 Register the function with the provided URL.  When that URL is requested,
@@ -180,6 +282,15 @@ You should see a page titled "This is a test" with this body:
   test -> bing
   test2 -> bong
 
+=head2 Start()
+
+Starts the server based on the config options passed to new().  Returns
+the port number the server is listening on, or undef if the server was
+unable to start.
+
+=head2 Stop()
+
+Shuts down the socket connection and cleans up after itself.
 
 =head1 AUTHOR
 
@@ -201,9 +312,14 @@ use IO::Select;
 use FileHandle;
 use POSIX;
 
-use vars qw ( $VERSION $SSL );
+use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.8.1";
+$VERSION = "0.9";
+
+$ALLOWED{GET} = 1;
+$ALLOWED{HEAD} = 1;
+$ALLOWED{POST} = 1;
+$ALLOWED{TRACE} = 1;
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -217,6 +333,34 @@ if (eval "require IO::Socket::SSL;")
 else
 {
     $SSL = 0;
+}
+
+#------------------------------------------------------------------------------
+# Do we have MIME::Base64 for Basic Authentication support?
+#------------------------------------------------------------------------------
+if (eval "require MIME::Base64;")
+{
+    require MIME::Base64;
+    import MIME::Base64;
+    $Base64 = 1;
+}
+else
+{
+    $Base64 = 0;
+}
+
+#------------------------------------------------------------------------------
+# Do we have Digest::MD5 for Digest Authentication support?
+#------------------------------------------------------------------------------
+if (eval "require Digest::MD5;")
+{
+    require Digest::MD5;
+    import Digest::MD5;
+    $DigestMD5 = 1;
+}
+else
+{
+    $DigestMD5 = 0;
 }
 
 
@@ -286,7 +430,123 @@ sub new
     
     $self->_mimetypes();
     
+    if ($DigestMD5)
+    {
+        $self->{PRIVATEKEY} = Digest::MD5::md5_hex("Net::HTTPServer/$VERSION".time);
+    }
+
+    $self->{AUTH} = {};
+    $self->{CALLBACKS} = {};
+    $self->{SERVER_TOKENS} = [ "Net::HTTPServer/$VERSION" ];
+
     return $self;
+}
+
+
+###############################################################################
+#
+# AddServerTokens - Add more tokens that will be sent on the Server: header
+#                  line of a response.
+#
+###############################################################################
+sub AddServerTokens
+{
+    my $self = shift;
+    my (@tokens) = @_;
+
+    foreach my $token (@tokens)
+    {
+        if ($token =~ / /)
+        {
+            croak("Server token cannot contain any spaces: \"$token\"");
+        }
+    
+        push(@{$self->{SERVER_TOKENS}},$token);
+    }
+}
+
+
+###############################################################################
+#
+# Process - Inner loop to handle connection, read requests, process them, and
+#           respond.
+#
+###############################################################################
+sub Process
+{
+    my $self = shift;
+    my $timeout = shift;
+
+    if (!defined($self->{SOCK}))
+    {
+        croak("Process() called on undefined socket.  Check the result from Start().\n    ");
+    }
+
+    my $timestop = undef;
+    $timestop = time + $timeout if defined($timeout);
+    
+    $self->_debug("PROC","Process: type($self->{CFG}->{TYPE})");
+
+    my $block = 1;
+    while($block)
+    {
+        if ($self->{CFG}->{TYPE} eq "single")
+        {
+            $self->_single_process($timestop);
+        }
+        elsif ($self->{CFG}->{TYPE} eq "forking")
+        {
+            $self->_forking_process();
+        }
+
+        $block = 0 if (defined($timestop) && (($timestop - time) <= 0));
+    }
+}
+
+
+###############################################################################
+#
+# RegisterAuth - Protect the given URL using the given authentication method
+#                and calling the supplied function to verify the username
+#                and password.
+#
+###############################################################################
+sub RegisterAuth
+{
+    my $self = shift;
+    my $method = shift;
+    my $url = shift;
+    my $realm = shift;
+    my $callback = shift;
+
+    $method = lc($method);
+    
+    if (($method ne "basic") && ($method ne "digest"))
+    {
+        croak("You did not specify a valid method to RegisterAuth: \"$method\"\nValid options are:\n    basic, digest\n");
+    }
+
+    if (($method eq "basic") || ($method eq "digest"))
+    {
+	    if (!$Base64)
+        {
+            $self->_log("Cannot register authentication callback as MIME::Base64 is not installed...");
+            carp("Cannot register authentication callback as MIME::Base64 is not installed...");
+        }
+    }
+    
+    if ($method eq "digest")
+    {
+	    if (!$DigestMD5)
+        {
+            $self->_log("Cannot register authentication callback as Digest::MD5 is not installed...");
+            carp("Cannot register authentication callback as Digest::MD5 is not installed...");
+        }
+    }
+    
+    $self->{AUTH}->{$url}->{method}   = $method;
+    $self->{AUTH}->{$url}->{realm}    = $realm;
+    $self->{AUTH}->{$url}->{callback} = $callback;
 }
 
 
@@ -422,43 +682,6 @@ sub Stop
 }
 
 
-###############################################################################
-#
-# Process - Inner loop to handle connection, read requests, process them, and
-#           respond.
-#
-###############################################################################
-sub Process
-{
-    my $self = shift;
-    my $timeout = shift;
-
-    if (!defined($self->{SOCK}))
-    {
-        croak("Process() called on undefined socket.  Check the result from Start().\n    ");
-    }
-
-    my $timestop = undef;
-    $timestop = time + $timeout if defined($timeout);
-    
-    $self->_debug("PROC","Process: type($self->{CFG}->{TYPE})");
-
-    my $block = 1;
-    while($block)
-    {
-        if ($self->{CFG}->{TYPE} eq "single")
-        {
-            $self->_single_process($timestop);
-        }
-        elsif ($self->{CFG}->{TYPE} eq "forking")
-        {
-            $self->_forking_process();
-        }
-
-        $block = 0 if (defined($timestop) && (($timestop - time) <= 0));
-    }
-}
-
 
 
 ###############################################################################
@@ -466,6 +689,184 @@ sub Process
 #| Private Flow Functions
 #+-----------------------------------------------------------------------------
 ###############################################################################
+
+###############################################################################
+#
+# _HandleAuth - Make sure that the user has passed the authentication to view
+#               this page.
+#
+###############################################################################
+sub _HandleAuth
+{
+    my $self = shift;
+    my $url = shift;
+    my $headers = shift;
+    my $env = shift;
+
+    my $authURL = $self->_checkAuth($url);
+    return unless defined($authURL);
+
+    $self->_debug("AUTH","_HandleAuth: url($url)");
+    $self->_debug("AUTH","_HandleAuth: authURL($authURL) method($self->{AUTH}->{$authURL}->{method})");
+
+    if ($self->{AUTH}->{$authURL}->{method} eq "basic")
+    {
+        return $self->_HandleAuthBasic($authURL,$url,$headers,$env);
+    }
+    elsif ($self->{AUTH}->{$authURL}->{method} eq "digest")
+    {
+        return $self->_HandleAuthDigest($authURL,$url,$headers,$env);
+    }
+
+    return;
+}
+
+
+###############################################################################
+#
+# _HandleAuthBasic - Parse the Authentication header and make sure that the
+#                    user is allowed to see this page.
+#
+###############################################################################
+sub _HandleAuthBasic
+{
+    my $self = shift;
+    my $authURL = shift;
+    my $url = shift;
+    my $headers = shift;
+    my $env = shift;
+
+    my $realm = $self->{AUTH}->{$authURL}->{realm};
+
+    $self->_debug("AUTH","_HandleAuthBasic: authURL($authURL) realm($realm)");
+
+    #-------------------------------------------------------------------------
+    # Auth if they did not send an Authorization
+    #-------------------------------------------------------------------------
+    return $self->_AuthBasic($realm) if !exists($headers->{Authorization});
+    $self->_debug("AUTH","_HandleAuthBasic: there was an Authorization");
+
+    my ($method,$base64) = split(" ",$headers->{Authorization},2);
+
+    #-------------------------------------------------------------------------
+    # Auth if they did not send a Basic Authorization
+    #-------------------------------------------------------------------------
+    return $self->_AuthBasic($realm) if (lc($method) ne "basic");
+    $self->_debug("AUTH","_HandleAuthBasic: it was a Basic");
+
+    my ($user,$password) = split(":",MIME::Base64::decode($base64));
+
+    my ($code,$real_password) =
+        &{$self->{AUTH}->{$authURL}->{callback}}($url,$user);
+    $self->_debug("AUTH","_HandleAuthBasic: callback return code($code)");
+
+    #-------------------------------------------------------------------------
+    # Return the results of the authentication handler
+    #-------------------------------------------------------------------------
+    return $self->_AuthBasic($realm) if ($code eq "401");
+    return $self->_AuthBasic($realm) if ($password ne $real_password);
+    return $self->_Forbidden() if ($code eq "403");
+
+    #-------------------------------------------------------------------------
+    # We authed, so set REMOTE_USER in the env hash and return
+    #-------------------------------------------------------------------------
+    $env->{'REMOTE_USER'} = $user;
+    return;
+}
+
+
+###############################################################################
+#
+# _HandleAuthDigest - Parse the Authentication header and make sure that the
+#                     user is allowed to see this page.
+#
+###############################################################################
+sub _HandleAuthDigest
+{
+    my $self = shift;
+    my $authURL = shift;
+    my $url = shift;
+    my $headers = shift;
+    my $env = shift;
+
+    my %digest;
+    $digest{algorithm} = "MD5";
+    $digest{nonce} = $self->_nonce();
+    $digest{realm} = $self->{AUTH}->{$authURL}->{realm};
+    $digest{qop} = "auth";
+
+    $self->_debug("AUTH","_HandleAuthDigest: authURL($authURL) realm($digest{realm})");
+
+    #-------------------------------------------------------------------------
+    # Auth if they did not send an Authorization
+    #-------------------------------------------------------------------------
+    return $self->_AuthDigest(\%digest) if !exists($headers->{Authorization});
+    $self->_debug("AUTH","_HandleAuthDigest: there was an Authorization");
+
+    my ($method,$directives) = split(" ",$headers->{Authorization},2);
+
+    #-------------------------------------------------------------------------
+    # Auth if they did not send a Digest Authorization
+    #-------------------------------------------------------------------------
+    return $self->_AuthDigest(\%digest) if (lc($method) ne "digest");
+    $self->_debug("AUTH","_HandleAuthDigest: it was a Digest");
+
+    my %authorization;
+    foreach my $directive (split(",",$directives))
+    {
+        my ($key,$value) = ($directive =~ /^\s*([^=]+)\s*=\s*\"?(.+?)\"?\s*$/);
+        $authorization{$key} = $value;
+    }
+    
+    #-------------------------------------------------------------------------
+    # Make sure that the uri in the auth and the request are the same.
+    #-------------------------------------------------------------------------
+    return $self->_BadRequest() if ($url ne $authorization{uri});
+
+    my ($code,$real_password) =
+        &{$self->{AUTH}->{$authURL}->{callback}}($url,$authorization{username});
+    $self->_debug("AUTH","_HandleAuthDigest: callback return code($code)");
+
+    my $ha1 = $self->_digest_HA1(\%authorization,$real_password);
+    my $ha2 = $self->_digest_HA2(\%authorization,$headers->{'__METHOD__'});
+    my $kd = $self->_digest_KD(\%authorization,$ha1,$ha2);
+
+    #-------------------------------------------------------------------------
+    # Return the results of the authentication handler
+    #-------------------------------------------------------------------------
+    return $self->_AuthDigest(\%digest) if ($code eq "401");
+    return $self->_AuthDigest(\%digest) if ($kd ne $authorization{response});
+    return $self->_Forbidden() if ($code eq "403");
+
+    #-------------------------------------------------------------------------
+    # If they authed, then check over the nonce and make sure it's valid.
+    #-------------------------------------------------------------------------
+    my ($time,$privatekey) = split(":",MIME::Base64::decode($authorization{nonce}));
+
+    if ($privatekey ne $self->{PRIVATEKEY})
+    {
+        $self->_debug("AUTH","_HandleAuthDigest: nonce is stale due to key.");
+        $digest{stale} = "TRUE";
+        return $self->_AuthDigest(\%digest)
+    }
+
+    if ((time - $time) > 30)
+    {
+        $self->_debug("AUTH","_HandleAuthDigest: nonce is stale due to time.");
+        $digest{stale} = "TRUE";
+        return $self->_AuthDigest(\%digest);
+    }
+    
+    # XXX - check nc for replay attack
+    # XXX - better nonce to minimize replay attacks?
+    
+    #-------------------------------------------------------------------------
+    # We authed, so set REMOTE_USER in the env hash and return
+    #-------------------------------------------------------------------------
+    $env->{'REMOTE_USER'} = $authorization{username};
+    return;
+}
+
 
 ###############################################################################
 #
@@ -477,26 +878,188 @@ sub _ProcessRequest
 {
     my $self = shift;
     my $url = shift;
+    my $headers = shift;
     my $env = shift;
-    
+
+    #-------------------------------------------------------------------------
+    # Catch some common errors/reponses without doing any real hard work
+    #-------------------------------------------------------------------------
+    return @{$self->_MethodNotAllowed()} if !exists($ALLOWED{$headers->{'__METHOD__'}});
+    return @{$self->_ExpectationFailed()} if exists($headers->{Expect});
+    return ("200",{},"") if ($headers->{'__METHOD__'} eq "TRACE");
+
     $url = $self->_chroot($url);
 
     my $response;
-    
+
     if (exists($self->{CALLBACKS}->{$url}))
     {
+        my $auth = $self->_HandleAuth($url,$headers,$env);
+        return @{$auth} if defined($auth);
+
+        $self->_debug("PROC","_ProcessRequest: Callback");
         $response = &{$self->{CALLBACKS}->{$url}}($env);
     }
     elsif (-e $self->{CFG}->{DOCROOT}."/$url")
     {
+        my $auth = $self->_HandleAuth($url,$headers,$env);
+        return @{$auth} if defined($auth);
+
+        $self->_debug("PROC","_ProcessRequest: File");
         $response = $self->_ServeFile($url);        
     }
     else
     {
+        $self->_debug("PROC","_ProcessRequest: Not found");
         $response = $self->_NotFound();
     }
-    
+
     return @{$response};
+}
+
+
+###############################################################################
+#
+# _ReadRequest - Take the full request, pull out the type, url, GET, POST, etc.
+#
+###############################################################################
+sub _ReadRequest
+{
+    my $self = shift;
+    my $request = shift;
+    
+    my %headers;
+    my %env;
+
+    my ($method,$url) = ($request =~ /(\S+)\s+(\S+)\s+/s);
+    
+    $self->_debug("REQ","_ReadRequest: method($method) url($url)");
+    $self->_log("$method $url");
+
+    $headers{'__TRACE__'} = $request if ($method eq "TRACE");
+    
+    my ($headers,$body) = ($request =~ /^(.+?)\r?\n\r?\n(.*?)$/s);
+    $self->_debug("REQ","_ReadRequest: headers($headers)");
+    $self->_debug("REQ","_ReadRequest: body($body)");
+
+    foreach my $header (split("\n",$headers))
+    {
+        my ($key,$value) = ($header =~ /^([^\:]+)\s*\:\s*(.+)\s*$/);
+        next unless defined($key);
+
+        $headers{$key} = $value;
+    }
+
+    $headers{'__METHOD__'} = $method;
+    
+    my $uri = new URI($url,"http");
+
+    my $path = $uri->path();
+
+    foreach my $key ($uri->query_param())
+    {
+        $env{$key} = $uri->query_param($key);
+    }
+
+    if ($method eq "POST")
+    {
+        $self->_debug("REQ","_ReadRequest: We got a POST");
+
+        my $post_uri = new URI("?$body","http");
+
+        foreach my $key ($post_uri->query_param())
+        {
+            $env{$key} = $post_uri->query_param($key);
+            $self->_debug("REQ","_ReadRequest: ENV: $key: $env{$key}");
+        }
+    }
+    
+    return ( $path, \%headers, \%env );
+}
+
+
+###############################################################################
+#
+# _ReturnResponse - Take all of the pieces and generate the reponse, and send
+#                   it out.
+#
+###############################################################################
+sub _ReturnResponse
+{
+    my $self = shift;
+    my $client = shift;
+    my $reqheaders = shift;
+    my $code = shift;
+    my $headers = shift;
+    my $response = shift;
+
+    #-------------------------------------------------------------------------
+    # Initialize the content type
+    #-------------------------------------------------------------------------
+    $headers->{'Content-Type'} = "text/html"
+        unless exists($headers->{'Content-Type'});
+    
+    #-------------------------------------------------------------------------
+    # Check that it's acceptable to the client
+    #-------------------------------------------------------------------------
+    if (exists($reqheaders->{'Accept'}))
+    {
+        if (!$self->_accept($reqheaders->{Accept},$headers->{'Content-Type'}))
+        {
+            ($code,$headers,$response) = @{$self->_NotAcceptable()};
+        }
+    }
+
+    #-------------------------------------------------------------------------
+    # Initialize any missing (and required) headers
+    #-------------------------------------------------------------------------
+    $headers->{'Accept-Ranges'} = "none";
+    $headers->{'Allow'} = join(", ",keys(%ALLOWED));
+    $headers->{'Content-Length'} = length($response)
+        unless exists($headers->{'Content-Length'});
+    $headers->{'Connection'} = "close";
+    $headers->{'Date'} = $self->_date();
+    $headers->{'Server'} = join(" ",@{$self->{SERVER_TOKENS}});
+    
+    #-------------------------------------------------------------------------
+    # If this was a HEAD, then there is no response
+    #-------------------------------------------------------------------------
+    $response = "" if ($reqheaders->{'__METHOD__'} eq "HEAD");
+    
+    if ($reqheaders->{'__METHOD__'} eq "TRACE")
+    {
+        $headers->{'Content-Type'} = "message/http";
+        $response = $reqheaders->{'__TRACE__'};
+    }
+
+    #-------------------------------------------------------------------------
+    # Format the return headers
+    #-------------------------------------------------------------------------
+    my $header = "HTTP/1.1 $code\n";
+    foreach my $key (keys(%{$headers}))
+    {
+        $header .= "$key: ".$headers->{$key}."\n";
+    }
+    chomp($header);
+    $header .= "\r\n\r\n";
+
+    #-------------------------------------------------------------------------
+    # Debug
+    #-------------------------------------------------------------------------
+    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
+    $self->_debug("RESP","_ReturnResponse: $header");
+    if (($headers->{'Content-Type'} eq "text/html") ||
+        ($headers->{'Content-Type'} eq "text/plain"))
+    {
+        $self->_debug("RESP","_ReturnResponse: $response");
+    }
+    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
+    
+    #-------------------------------------------------------------------------
+    # Send the headers and response
+    #-------------------------------------------------------------------------
+    return unless defined($self->_send($client,$header));
+    return unless defined($self->_send($client,$response));
 }
 
 
@@ -515,7 +1078,7 @@ sub _ServeFile
 
     if (-d $fullpath)
     {
-        $self->_debug("FILE","_ServeFile: This is a directory, look for a index file.");
+        $self->_debug("FILE","_ServeFile: This is a directory, look for an index file.");
         my $match = 0;
         foreach my $index (@{$self->{CFG}->{INDEX}})
         {
@@ -560,93 +1123,11 @@ sub _ServeFile
     {
         $headers{'Content-Type'} = $self->{MIMETYPES}->{txt};
     }
-    
+
+    $headers{'Content-Length'} = (stat( $fullpath ))[7];
+    $headers{'Last-Modified'} = $self->_date((stat( $fullpath ))[9]);
+
     return ["200",\%headers,$fileHandle];
-}
-
-
-###############################################################################
-#
-# _ReadRequest - Take the full request, pull out the type, url, GET, POST, etc.
-#
-###############################################################################
-sub _ReadRequest
-{
-    my $self = shift;
-    my $request = shift;
-    
-    my %env;
-
-    my ($type,$url) = ($request =~ /(GET|POST)\s+(\S+)\s+/s);
-    
-    $self->_debug("REQ","_ReadRequest: type($type) url($url)");
-    $self->_log("$type $url");
-            
-    my $uri = new URI($url,"http");
-
-    my $path = $uri->path();
-
-    foreach my $key ($uri->query_param())
-    {
-        $env{$key} = $uri->query_param($key);
-    }
-
-    if ($type =~ /^post$/i)
-    {
-        $self->_debug("REQ","_ReadRequest: We got a POST");
-        $self->_debug("REQ","_ReadRequest: request($request)");
-        my ($body) = ($request =~ /\r?\n\r?\n(.*?)$/s);
-        $self->_debug("REQ","_ReadRequest: body($body)");
-
-        my $post_uri = new URI("?$body","http");
-        
-        foreach my $key ($post_uri->query_param())
-        {
-            $env{$key} = $post_uri->query_param($key);
-            $self->_debug("REQ","_ReadRequest: ENV: $key: $env{$key}");
-        }
-    }
-    
-    return ( $path, \%env );
-}
-
-
-###############################################################################
-#
-# _ReturnResponse - Take all of the pieces and generate the reponse, and send
-#                   it out.
-#
-###############################################################################
-sub _ReturnResponse
-{
-    my $self = shift;
-    my $client = shift;
-    my $code = shift;
-    my $headers = shift;
-    my $response = shift;
-
-    my $header = "HTTP/1.1 $code\n";
-    $header .= "Server: Net::HTTPServer v$VERSION\n";
-    $headers->{'Content-Type'} = "text/html"
-        unless exists($headers->{'Content-Type'});
-    foreach my $key (keys(%{$headers}))
-    {
-        $header .= "$key: ".$headers->{$key}."\n";
-    }
-    chomp($header);
-    $header .= "\r\n\r\n";
-
-    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
-    $self->_debug("RESP","_ReturnResponse: $header");
-    if (($headers->{'Content-Type'} eq "text/html") ||
-        ($headers->{'Content-Type'} eq "text/plain"))
-    {
-        $self->_debug("RESP","_ReturnResponse: $response");
-    }
-    $self->_debug("RESP","_ReturnResponse: ----------------------------------------");
-    
-    return unless defined($self->_send($client,$header));
-    return unless defined($self->_send($client,$response));
 }
 
 
@@ -657,6 +1138,79 @@ sub _ReturnResponse
 #| Private Canned Responses
 #+-----------------------------------------------------------------------------
 ###############################################################################
+
+###############################################################################
+#
+# _Auth - Send an authentication response
+#
+###############################################################################
+sub _Auth
+{
+    my $self = shift;
+    my $method = shift;
+    my $args = shift;
+
+    my @directives = "";
+
+    foreach my $key (keys(%{$args}))
+    {
+        push(@directives,$key.'="'.$args->{$key}.'"');
+    }
+
+    my $directives = join(",",@directives);
+    
+    return $self->_Error("401",
+                         { 'WWW-Authenticate' => "$method $directives" },
+                         "Unauthorized",
+                         "Authorization is required to access this object on this server."
+                        );
+}
+
+
+###############################################################################
+#
+# _AuthBasic - Send a Basic authentication response
+#
+###############################################################################
+sub _AuthBasic
+{
+    my $self = shift;
+	my $realm = shift;
+
+    return $self->_Auth("Basic",{ realm=>$realm });
+}
+
+
+###############################################################################
+#
+# _AuthDigest - Send a Digest authentication response
+#
+###############################################################################
+sub _AuthDigest
+{
+    my $self = shift;
+	my $args = shift;
+
+    return $self->_Auth("Digest",$args);
+}
+
+
+###############################################################################
+#
+# _BadRequest - 400, someone was being naughty
+#
+###############################################################################
+sub _BadRequest
+{
+    my $self = shift;
+
+    return $self->_Error("400",
+                         {},
+                         "Bad Request",
+                         "You made a bad request.  Somthing you sent did not match up.",
+                        );
+}
+
 
 ###############################################################################
 #
@@ -687,6 +1241,102 @@ sub _DirList
 
 ###############################################################################
 #
+# _Error - take a code, headers, error string, and text and return a standard
+#          response.
+#
+###############################################################################
+sub _Error
+{
+    my $self = shift;
+    my $code = shift;
+    my $headers = shift;
+    my $string = shift;
+    my $body = shift;
+
+    my $response = "<html>";
+    $response .= "<head><title>".$string."!</title></head>";
+    $response .= "<body bgcolor='#FFFFFF' text='#000000' link='#0000CC'>";
+    $response .= "<h1>".$string."!</h1>";
+    $response .= "<dl><dd>".$body."</dd></dl>";
+    $response .= "<h2>Error ".$code."</h2>";
+    $response .= "</body>";
+    $response .= "</html>";
+
+    return [$code,$headers,$response];
+}
+
+
+###############################################################################
+#
+# _ExpectationFailed - 417, sigh... I never meet anyone's expectations
+#
+###############################################################################
+sub _ExpectationFailed
+{
+    my $self = shift;
+
+    return $self->_Error("400",
+                         {},
+                         "Expectation Failed",
+                         "The server could not meet the expectations you had for it."
+                        );
+}
+
+
+###############################################################################
+#
+# _Forbidden - ahhh the equally dreaded 403
+#
+###############################################################################
+sub _Forbidden
+{
+    my $self = shift;
+
+    return $self->_Error("403",
+                         {},
+                         "Forbidden",
+                         "You do not have permission to access this object on this server.",
+                        );
+}
+
+
+###############################################################################
+#
+# _MethodNotAllowed - 405... you must only do what is allowed
+#
+###############################################################################
+sub _MethodNotAllowed
+{
+    my $self = shift;
+
+    return $self->_Error("405",
+                         {},
+                         "Method Not Allowed",
+                         "You are not allowed to do what you just tried to do..."
+                        );
+}
+
+
+###############################################################################
+#
+# _NotAcceptable - the client is being inflexiable... they won't accept what
+#                  we want to send.
+#
+###############################################################################
+sub _NotAcceptable
+{
+    my $self = shift;
+
+    return $self->_Error("406",
+                         {},
+                         "Not Acceptable",
+                         "The server wants to return a file in a format that your browser does not accept.",
+                        );
+}
+
+
+###############################################################################
+#
 # _NotFound - ahhh the dreaded 404
 #
 ###############################################################################
@@ -694,28 +1344,11 @@ sub _NotFound
 {
     my $self = shift;
 
-    return ["404",{},<<'NOTFOUND'];
-<html>
-  <head>
-    <title>Object not found!</title>
-  </head>
-
-  <body BGCOLOR="#FFFFFF" TEXT="#000000" LINK="#0000CC">
-    <h1>Object not found!</h1>
-    <dl>
-      <dd>
-        The requested URL was not found on this server. 
-
-        If you entered the URL manually please check your
-        spelling and try again.
-      </dd>
-    </dl>
-
-    <h2>Error 404</h2>
-  </body>
-</html>
-NOTFOUND
-
+    return $self->_Error("404",
+                         {},
+                         "Not Found",
+                         "The requested URL was not found on this server.  If you entered the URL manually please check your spelling and try again."
+                        );
 }
 
 
@@ -832,7 +1465,6 @@ sub _read_chunk
 }
 
 
-
 ###############################################################################
 #
 # _send - helper function to keep sending until all of the data has been
@@ -859,8 +1491,6 @@ sub _send
 
     return 1;
 }
-
-
 
 
 ###############################################################################
@@ -908,42 +1538,6 @@ sub _send_data
 #| Private Server Functions
 #+-----------------------------------------------------------------------------
 ###############################################################################
-
-###############################################################################
-#
-# _process - Handle a client.
-#
-###############################################################################
-sub _process
-{
-    my $self = shift;
-    my $client = shift;
-
-    $self->_debug("PROC","_process: We have a client, let's treat them well.");
-
-    $client->autoflush(1);
-            
-    my $request = $self->_read($client);
-            
-    #------------------------------------------------------------------
-    # Take the request and do the magic
-    #------------------------------------------------------------------
-    if (defined($request))
-    {
-        my ($path,$env) = $self->_ReadRequest($request);
-        my ($code,$headers,$response) = $self->_ProcessRequest($path,$env);
-        $self->_ReturnResponse($client,$code,$headers,$response);
-    }
-    
-    #------------------------------------------------------------------
-    # That's it.  Close down the connection.
-    #------------------------------------------------------------------
-    $client->close() if ($self->{CFG}->{SSL} == 0);
-    $client->close(SSL_no_shutdown=>1) if ($self->{CFG}->{SSL} == 1);
-    
-    $self->_debug("PROC","_process: Thanks for shopping with us!");
-}
-
 
 ###############################################################################
 #
@@ -1044,6 +1638,42 @@ sub _forking_spawn
 
 ###############################################################################
 #
+# _process - Handle a client.
+#
+###############################################################################
+sub _process
+{
+    my $self = shift;
+    my $client = shift;
+
+    $self->_debug("PROC","_process: We have a client, let's treat them well.");
+
+    $client->autoflush(1);
+            
+    my $request = $self->_read($client);
+            
+    #------------------------------------------------------------------
+    # Take the request and do the magic
+    #------------------------------------------------------------------
+    if (defined($request))
+    {
+        my ($path,$reqheaders,$env) = $self->_ReadRequest($request);
+        my ($code,$headers,$response) = $self->_ProcessRequest($path,$reqheaders,$env);
+        $self->_ReturnResponse($client,$reqheaders,$code,$headers,$response);
+    }
+    
+    #------------------------------------------------------------------
+    # That's it.  Close down the connection.
+    #------------------------------------------------------------------
+    $client->close() if ($self->{CFG}->{SSL} == 0);
+    $client->close(SSL_no_shutdown=>1) if ($self->{CFG}->{SSL} == 1);
+    
+    $self->_debug("PROC","_process: Thanks for shopping with us!");
+}
+
+
+###############################################################################
+#
 # _single_process - This is a single process model.
 #
 ###############################################################################
@@ -1083,6 +1713,34 @@ sub _single_process
 
 ###############################################################################
 #
+# _accept - given an Accept line and Content-Type, is it in the list?
+#
+###############################################################################
+sub _accept
+{
+    my $self = shift;
+    my $accept = shift;
+    my $contentType = shift;
+
+    $accept =~ s/\s*\,\s*/\,/g;
+    $accept =~ s/\s*\;\s*/\;/g;
+    
+    my ($mainType,$subType) = split("/",$contentType,2);
+
+    foreach my $entry (split(",",$accept))
+    {
+        my ($testType,$scale) = split(";",$entry,2);
+        return 1 if ($testType eq $contentType);
+        return 1 if ($testType eq "$mainType/*");
+        return 1 if ($testType eq "*/*");
+    }
+
+    return;
+}
+
+
+###############################################################################
+#
 # _arg - if the arg exists then use it, else use the default.
 #
 ###############################################################################
@@ -1093,6 +1751,32 @@ sub _arg
     my $default = shift;
 
     return (exists($self->{ARGS}->{$arg}) ? $self->{ARGS}->{$arg} : $default);
+}
+
+
+###############################################################################
+#
+# _checkAuth - return 1 if the url requires an Auth, undefined otherwise.
+#
+###############################################################################
+sub _checkAuth
+{
+    my $self = shift;
+    my $url = shift;
+
+	my @url = split("/",$url);
+    foreach my $i (reverse 0..$#url)
+    {
+        my $check = join("/",@url[0..$i]);
+        if($check eq "")
+        {
+            $check = "/";
+        }
+        $self->_debug("AUTH","_checkAuth: check($check)");
+        return $check if exists($self->{AUTH}->{$check});
+    }
+
+    return;
 }
 
 
@@ -1119,6 +1803,34 @@ sub _chroot
 
 ###############################################################################
 #
+# _date - format the date correctly for the given time.
+#
+###############################################################################
+sub _date
+{
+    my $self = shift;
+    my $time = shift;
+
+    $time = time unless defined($time);
+
+    my @times = gmtime($time);
+    
+    my $date = sprintf("%s, %02d %s %d %02d:%02d:%02d GMT",
+                       (qw(Sun Mon Tue Wed Thu Fri Sat))[$times[6]],
+                       $times[3],
+                       (qw(Jan Feb Mar Apr May Jun Jul Aug Oct Nov Dec))[$times[4]],
+                       $times[5]+1900,
+                       $times[2],
+                       $times[1],
+                       $times[0]
+                      );
+
+    return $date;
+}
+
+
+###############################################################################
+#
 # _debug - print out a debug message
 #
 ###############################################################################
@@ -1131,6 +1843,102 @@ sub _debug
     print "$zone: ",join("",@message),"\n"
         if (exists($self->{DEBUG}->{$zone}) ||
             exists($self->{DEBUG}->{ALL}));
+}
+
+
+###############################################################################
+#
+# _digest_HA1 - calculate the H(A1) per RFC2617
+#
+###############################################################################
+sub _digest_HA1
+{
+    my $self = shift;
+    my $auth = shift;
+    my $passwd = shift;
+    
+    my @raw;
+    push(@raw,$auth->{username});
+    push(@raw,$auth->{realm});
+    push(@raw,$passwd);
+    
+    my $raw = join(":",@raw);
+
+    #$self->_debug("AUTH","_digest_HA1: raw($raw)");
+
+    return Digest::MD5::md5_hex($raw);
+}
+
+
+###############################################################################
+#
+# _digest_HA2 - calculate the H(A2) per RFC2617
+#
+###############################################################################
+sub _digest_HA2
+{
+    my $self = shift;
+    my $auth = shift;
+    my $method = shift;
+
+    my @raw;
+    push(@raw,$method);
+    push(@raw,$auth->{uri});
+
+    my $raw = join(":",@raw);
+
+    #$self->_debug("AUTH","_digest_HA2: raw($raw)");
+
+    return Digest::MD5::md5_hex($raw);
+}
+
+
+###############################################################################
+#
+# _digest_KD - calculate the KD() per RFC2617
+#
+###############################################################################
+sub _digest_KD
+{
+    my $self = shift;
+    my $auth = shift;
+    my $ha1 = shift;
+    my $ha2 = shift;
+
+    my @raw;
+    push(@raw,$ha1);
+    push(@raw,$auth->{nonce});
+
+    if(exists($auth->{qop}) && ($auth->{qop} eq "auth"))
+    {
+        push(@raw,$auth->{nc});
+        push(@raw,$auth->{cnonce});
+        push(@raw,$auth->{qop});
+    }
+
+    push(@raw,$ha2);
+    
+    my $raw = join(":",@raw);
+
+    #$self->_debug("AUTH","_digest_KD: raw($raw)");
+
+    return Digest::MD5::md5_hex($raw);
+}
+
+
+###############################################################################
+#
+# _log - print out the message to a log with the current time
+#
+###############################################################################
+sub _log
+{
+    my $self = shift;
+    my (@message) = @_;
+    
+    my $fh = $self->{LOG};
+    
+    print $fh $self->_timestamp()," - ",join("",@message),"\n";
 }
 
 
@@ -1199,17 +2007,14 @@ sub _nonblock
 
 ###############################################################################
 #
-# _log - print out the message to a log with the current time
+# _nonce - produce a new nonce
 #
 ###############################################################################
-sub _log
+sub _nonce
 {
     my $self = shift;
-    my (@message) = @_;
-    
-    my $fh = $self->{LOG};
-    
-    print $fh $self->_timestamp()," - ",join("",@message),"\n";
+
+    return MIME::Base64::encode(time.":".$self->{PRIVATEKEY},"");
 }
 
 

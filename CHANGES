@@ -1,6 +1,19 @@
+0.9
+===
+  - Added support for Digest Authentication.
+
+  - Added more of the required HTTP/1.1 headers.  Added support for HEAD,
+    and TRACE.  Thanks to Jamie Lockier for pointing out those deficiencies.
+
+  - Added support for Basic Authentication.  Thanks to Alan Barclay for this
+    feature.
+
+  - Added the ability to present other tokens on the Server: line using the
+    AddServerTokens function. Thanks to Darren Chamberlain for this feature.
+
 0.8.1
 =====
-  - Big bug.  If you write too fast ten sometimes syswrite returns undef
+  - Big bug.  If you write too fast then sometimes syswrite returns undef
     even though it was not *really* an error.  Use select to wait on this.
     Hopefully this won't create more problems.
 
