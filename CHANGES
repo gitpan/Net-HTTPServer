@@ -1,3 +1,11 @@
+0.9.1
+=====
+
+  - Fixed directory listing code when the file name contains :.  This confused
+    Mozilla (and likely other browsers) thinking that everything before the :
+    was a protocol name (http:..).  Now we append the path of the request on
+    those files.
+
 0.9
 ===
   - Added support for Digest Authentication.

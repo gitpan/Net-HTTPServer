@@ -314,7 +314,7 @@ use POSIX;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.9";
+$VERSION = "0.9.1";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -1230,7 +1230,14 @@ sub _DirList
         next if ($file eq ".");
         next if (($file eq "..") && ($path eq "/"));
 
-        $res .= "<a href='$file'>$file</a><br/>\n";
+        if ($file =~ /\:/)
+        {
+            $res .= "<a href='${path}${file}'>$file</a><br/>\n";
+        }
+        else
+        {
+            $res .= "<a href='$file'>$file</a><br/>\n";
+        }
     }
 
     $res .= "</body></html>\n";
