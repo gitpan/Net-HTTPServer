@@ -314,7 +314,7 @@ use POSIX;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "0.9.2";
+$VERSION = "0.9.3";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -593,7 +593,10 @@ sub Start
                                                  Proto=>"tcp",
                                                  Listen=>10,
                                                  Reuse=>1,
-                                                 Blocking=>0,
+                                                 (($^O ne "MSWin32") ?
+                                                  (Blocking=>0) :
+                                                  ()
+                                                 ),
                                                 );
         }
         else
@@ -610,11 +613,14 @@ sub Start
                                                 Proto=>"tcp",
                                                 Listen=>10,
                                                 Reuse=>1,
-                                                Blocking=>0,
                                                 SSL_key_file=>$self->{CFG}->{SSL_KEY},
                                                 SSL_cert_file=>$self->{CFG}->{SSL_CERT},
                                                 SSL_ca_file=>$self->{CFG}->{SSL_CA},
                                                 SSL_verify_mode=> 0x01,
+                                                (($^O ne "MSWin32") ?
+                                                 (Blocking=>0) :
+                                                 ()
+                                                ),
                                                );
         }
         last if defined($self->{SOCK});
@@ -2024,7 +2030,9 @@ sub _nonblock
     #--------------------------------------------------------------------------
     if ($^O eq "MSWin32")
     {
-        ioctl( $socket, 0x80000000 | (4 << 16) | (ord('f') << 8) | 126, 1) ||
+        my $FIONBIO = 0x8004667E;
+        my $temp = 1;
+        ioctl( $socket, $FIONBIO, \$temp) ||
             croak("Can't make socket nonblocking (win32): $!");
         return;
     }

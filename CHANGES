@@ -1,3 +1,11 @@
+0.9.3
+=====
+
+  - Fixed bug in Windows support and nonblocking.  Turns out that ActivePerl
+    doesn't like the Blocking=>0 call in IO::Socket::INET creation, and 
+    my call to ioctl was wrong.  This should fix everyone who was having
+    problems.
+
 0.9.2
 =====
 
