@@ -1,3 +1,13 @@
+0.7
+===
+  - Fixed IO::Socket::SSL interface problem.  Accessing multiple pages
+    would result in SSL errors about not having a context.  The lesson
+    for the day is: Forking does weird things.  In this case it
+    *appears* that the SSL part of the socket was being closed when we
+    sent the web page.  Much reading shows us the SSL_no_shutdown option
+    to close does not shutdown the SSL.  This seems to fix the problem.
+  - Reworked forking inner loop.  There were some performance issues.
+
 0.6.5
 =====
   - Removed a rogue debug statement.

@@ -203,7 +203,7 @@ use POSIX;
 
 use vars qw ( $VERSION $SSL );
 
-$VERSION = "0.6.5";
+$VERSION = "0.7";
 
 #------------------------------------------------------------------------------
 # Do we have IO::Socket::SSL for https support?
@@ -351,7 +351,8 @@ sub Start
                                                 SSL_key_file=>$self->{CFG}->{SSL_KEY},
                                                 SSL_cert_file=>$self->{CFG}->{SSL_CERT},
                                                 SSL_ca_file=>$self->{CFG}->{SSL_CA},
-                                                SSL_verify_mode=> 0x01);
+                                                SSL_verify_mode=> 0x01,
+                                               );
         }
         last if defined($self->{SOCK});
         last if ($port == 9999);
@@ -889,6 +890,8 @@ sub _process
     my $client = shift;
 
     $self->_debug("PROC","We have a client, let's treat them well.");
+
+    $client->autoflush(1);
             
     my $request = $self->_read($client);
             
@@ -905,7 +908,8 @@ sub _process
     #------------------------------------------------------------------
     # That's it.  Close down the connection.
     #------------------------------------------------------------------
-    $client->close();
+    $client->close() if ($self->{CFG}->{SSL} == 0);
+    $client->close(SSL_no_shutdown=>1) if ($self->{CFG}->{SSL} == 1);
     
     $self->_debug("PROC","Thanks for shopping with us!");
 }
@@ -992,9 +996,14 @@ sub _forking_spawn
 
         my $max_clients = 20;  # Make this a config?
     
-        foreach (0..$max_clients)
+        foreach my $i (0..$max_clients)
         {
-            my $client = $self->{SOCK}->accept() or last;
+            my $client;
+            if($self->{SELECT}->can_read())
+            {
+                $client = $self->{SOCK}->accept();
+            }
+            last unless defined($client);
             $self->_process($client);
         }
 
