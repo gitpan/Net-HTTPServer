@@ -1,0 +1,9 @@
+CHANGES
+README
+LICENSE.LGPL
+MANIFEST
+MANIFEST.SKIP
+Makefile.PL
+examples/simple_test.pl
+lib/Net/HTTPServer.pm
+lib/Net/HTTPServer/mime.types

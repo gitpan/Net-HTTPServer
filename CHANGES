@@ -1,0 +1,10 @@
+0.1
+===
+  - Auto-find the mime.types in the module directories.
+  - Port scanning for embeded on the fly servers.
+  - Redirects directories without / to same dir with /:  foo/bar -> foo/bar/
+  - Lists directories
+  - Serves files
+  - Allow for registering of functions to URLs so that it gets called when
+    the URL is requested.
+

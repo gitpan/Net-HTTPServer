@@ -1,0 +1,38 @@
+Net::HTTPServer v0.1
+
+This is a light weight HTTP server that serves files as well as attaching
+function calls to URL requests.  This allows you to do a lot of things:
+
+- embed the web server into your program and serve up
+  anything your program can do
+
+- make a file available for download that you created
+
+- just take you CGI program and turn it into a stand
+  alone HTTP server that you can run on any machine.
+
+- lots lots more
+
+Ryan Eatmon
+reatmon@mail.com
+
+
+REQUIREMENTS
+  - URI          - Handles all of the URL magic
+
+INSTALLATION
+
+  perl Makefile.PL
+  make
+  make install
+
+STATUS
+
+  This is the first release.  I built this for a couple of side projects I
+wanted to tackle, and wanted to make it available to everyone.  Please give
+me feedback.  I would love to make this more and more feature rich, while
+still keeping it light weight.
+
+DATE
+  2003/06/26
+
