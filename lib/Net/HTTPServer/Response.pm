@@ -145,7 +145,7 @@ use URI::Escape;
 
 use vars qw ( $VERSION );
 
-$VERSION = "1.0.1";
+$VERSION = "1.0.2";
 
 sub new
 {

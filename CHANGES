@@ -1,3 +1,10 @@
+1.0.2
+=====
+
+  - If you register a callback /some/path/index.foo, AND you set the index
+    list to include index.foo then /some/path/ will resolve to the callback.
+    Thanks to John Jones for this request.
+
 1.0.1
 =====
 

@@ -392,7 +392,7 @@ use Net::HTTPServer::Request;
 
 use vars qw ( $VERSION %ALLOWED $SSL $Base64 $DigestMD5 );
 
-$VERSION = "1.0.1";
+$VERSION = "1.0.2";
 
 $ALLOWED{GET} = 1;
 $ALLOWED{HEAD} = 1;
@@ -1016,7 +1016,64 @@ sub _ProcessRequest
 
     my $responseObj;
 
-    if (exists($self->{CALLBACKS}->{$requestObj->Path()}))
+    my $reqPath = $requestObj->Path();
+    my $method = "not found";
+    if (exists($self->{CALLBACKS}->{$reqPath}))
+    {
+        $method = "callback";
+    }
+    elsif (-e $self->{CFG}->{DOCROOT}."/".$reqPath)
+    {
+        $method = "file";
+
+        if (-d $self->{CFG}->{DOCROOT}."/".$reqPath)
+        {
+            $self->_debug("PROC","_ProcessRequest: This is a directory, look for an index file.");
+            foreach my $index (@{$self->{CFG}->{INDEX}})
+            {
+                my $testPath = $reqPath.$index;
+            
+                $self->_debug("PROC","_ProcessRequest:   index? ($testPath)");
+
+                if (exists($self->{CALLBACKS}->{$testPath}))
+                {
+                    $self->_debug("PROC","_ProcessRequest:   index: callback: ($testPath)");
+                    $method = "callback";
+                    $reqPath = $testPath;
+                    last;
+                }
+
+                if (-f $self->{CFG}->{DOCROOT}."/".$testPath)
+                {
+                    $self->_debug("PROC","_ProcessRequest:   index: file: ($testPath)");
+                    $reqPath = $testPath;
+                    last;
+                }
+            }
+        }
+    }
+    elsif ($reqPath =~ /\/$/)
+    {
+        $self->_debug("PROC","_ProcessRequest: Looks like a directory... index callback?");
+        foreach my $index (@{$self->{CFG}->{INDEX}})
+        {
+            my $testPath = $reqPath.$index;
+            
+            $self->_debug("PROC","_ProcessRequest:   index? ($testPath)");
+            
+            if (exists($self->{CALLBACKS}->{$testPath}))
+            {
+                $self->_debug("PROC","_ProcessRequest:   index: callback: ($testPath)");
+                $method = "callback";
+                $reqPath = $testPath;
+                last;
+            }
+        }
+    }
+
+    $self->_debug("PROC","_ProcessRequest: method($method)");
+                    
+    if ($method eq "callback")
     {
         my $auth = $self->_HandleAuth($requestObj);
         return $auth if defined($auth);
@@ -1024,7 +1081,7 @@ sub _ProcessRequest
         $self->_debug("PROC","_ProcessRequest: Callback");
         if ($self->{CFG}->{OLDREQUEST})
         {
-            my $response = &{$self->{CALLBACKS}->{$requestObj->Path()}}($requestObj->Env(),$requestObj->Cookie());
+            my $response = &{$self->{CALLBACKS}->{$reqPath}}($requestObj->Env(),$requestObj->Cookie());
             $responseObj = new Net::HTTPServer::Response(code=>$response->[0],
                                                          headers=>$response->[1],
                                                          body=>$response->[2],
@@ -1032,16 +1089,16 @@ sub _ProcessRequest
         }
         else
         {
-            $responseObj = &{$self->{CALLBACKS}->{$requestObj->Path()}}($requestObj);
+            $responseObj = &{$self->{CALLBACKS}->{$reqPath}}($requestObj);
         }
     }
-    elsif (-e $self->{CFG}->{DOCROOT}."/".$requestObj->Path())
+    elsif ($method eq "file")
     {
         my $auth = $self->_HandleAuth($requestObj);
         return $auth if defined($auth);
 
         $self->_debug("PROC","_ProcessRequest: File");
-        $responseObj = $self->_ServeFile($requestObj->Path());        
+        $responseObj = $self->_ServeFile($reqPath);        
     }
     else
     {
@@ -1170,31 +1227,19 @@ sub _ServeFile
 
     my $fullpath = $self->{CFG}->{DOCROOT}."/$path";
 
+    $self->_debug("FILE","_ServeFile: fullpath($fullpath)");
+        
     if (-d $fullpath)
     {
-        $self->_debug("FILE","_ServeFile: This is a directory, look for an index file.");
-        my $match = 0;
-        foreach my $index (@{$self->{CFG}->{INDEX}})
-        {
-            if (-f $fullpath."/".$index)
-            {
-                $match = 1;
-                $fullpath .= "/$index";
-                $fullpath =~ s/\/+/\//g;
-                last;
-            }
-        }
-        
-        if ($match == 0)
-        {
-            if ($path !~ /\/$/)
-            {
-                return $self->_Redirect($path."/");
-            }
+        $self->_debug("FILE","_ServeFile: This is a directory.");
 
-            $self->_debug("FILE","_ServeFile: Show a directory listing.");
-            return $self->_DirList($path);
+        if ($path !~ /\/$/)
+        {
+            return $self->_Redirect($path."/");
         }
+
+        $self->_debug("FILE","_ServeFile: Show a directory listing.");
+        return $self->_DirList($path);
     }
 
     if (!(-f $fullpath))
